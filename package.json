@@ -13,6 +13,13 @@
     "pipeline"
   ],
   "license": "MIT",
+  "author": "Karlderkarl",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Karlderkarl/pi-governance-pipeline.git"
+  },
+  "homepage": "https://github.com/Karlderkarl/pi-governance-pipeline#readme",
+  "bugs": "https://github.com/Karlderkarl/pi-governance-pipeline/issues",
   "type": "module",
   "files": [
     "skills",

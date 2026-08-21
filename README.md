@@ -32,7 +32,7 @@ ticket without a ceiling. This package separates the three concerns:
 ```bash
 pi install npm:pi-governance-pipeline
 # or
-pi install git:github.com/<user>/pi-governance-pipeline@v0.1.0
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v0.1.0
 # try it for one run
 pi -e npm:pi-governance-pipeline
 ```
