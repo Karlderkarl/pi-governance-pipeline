@@ -1,0 +1,10 @@
+# The tarball ships a bash script and node libs. CRLF in auto-develop.sh makes
+# `/usr/bin/env bash\r` fail on Linux and macOS, so line endings are pinned to
+# LF in the working tree too, not only in the blob.
+* text=auto eol=lf
+*.sh   text eol=lf
+*.mjs  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.ts   text eol=lf
+*.xml  text eol=lf
