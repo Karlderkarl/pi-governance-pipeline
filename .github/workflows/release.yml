@@ -1,0 +1,48 @@
+# Publishes to npm when a v* tag is pushed, using npm Trusted Publishing (OIDC).
+#
+# No token is stored anywhere. npm verifies the short-lived OIDC token GitHub
+# mints for this workflow against the trusted publisher configured at
+# https://www.npmjs.com/package/pi-governance-pipeline/access
+#
+# The tag must match the version in package.json, otherwise the job fails
+# before it reaches the registry.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required: this is what mints the OIDC token
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs a recent npm; setup-node's bundled version
+      # is not guaranteed to be new enough.
+      - run: npm install -g npm@latest
+
+      - name: Tag must match package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $pkg" >&2
+            exit 1
+          fi
+          echo "publishing $pkg"
+
+      - name: Pack and inspect
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish
