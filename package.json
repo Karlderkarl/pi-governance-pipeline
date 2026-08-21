@@ -18,10 +18,12 @@
     "skills",
     "extensions",
     "prompts",
-    "docs",
     "README.md",
     "LICENSE"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "typebox": "*"
