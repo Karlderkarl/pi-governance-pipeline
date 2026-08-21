@@ -30,11 +30,11 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.1
+pi install npm:pi-governance-pipeline@1.0.2
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.1
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.2
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.1
+pi -e npm:pi-governance-pipeline@1.0.2
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
