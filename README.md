@@ -30,12 +30,25 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline
-# or
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v0.1.0
-# try it for one run
-pi -e npm:pi-governance-pipeline
+pi install npm:pi-governance-pipeline@1.0.0
+# or, pinned to the git tag
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.0
+# try it for one run, without installing
+pi -e npm:pi-governance-pipeline@1.0.0
 ```
+
+Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
+pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
+
+```bash
+pi install npm:pi-governance-pipeline@1.1.0
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.1.0
+```
+
+Drop the `@version` if you would rather track the latest release.
+
+The contract in `AGENTS.md` carries its own version (`contract v1`), independent of the package
+version. A package release that changes what a contract field means bumps both.
 
 ## Use
 
