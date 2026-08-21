@@ -1,0 +1,98 @@
+# Pipeline Template
+
+Structural blueprint for the generated `auto-develop.sh`. Stack-agnostic: the gates are read from governance, never hardcoded.
+
+## Contents
+
+- [Layout](#layout)
+- [State file](#state-file)
+- [Main loop](#main-loop)
+- [Flags](#flags)
+- [Logging](#logging)
+- [Invariants](#invariants)
+
+## Layout
+
+```
+auto-develop.sh              # entry point, the loop
+.pipeline/
+  state/<root_id>.json       # counters and budget
+  logs/<root_id>/<run>.jsonl # per-run event log
+  prompts/                   # rendered prompts, for debugging
+tasks.md                     # or the issue source declared in governance
+```
+
+## State file
+
+One per root issue. The single source of truth for counters — no model ever holds them.
+
+```json
+{
+  "root_id": "issue-42",
+  "runs_used": 7,
+  "max_runs_per_tree": 25,
+  "depth": 0,
+  "issues": {
+    "issue-42": { "attempts_controller": 3, "attempts_master": 0, "status": "split" },
+    "issue-42a": { "attempts_controller": 1, "attempts_master": 0, "status": "open" }
+  }
+}
+```
+
+Written after every step, not at the end. A crashed run must be resumable, and a lost counter means a budget that silently resets.
+
+## Main loop
+
+```
+load governance ─▶ validate contract ─▶ pick next issue
+  │
+  ├─ budget exhausted? ─▶ block tree, write MEMORY.md, exit
+  │
+  ├─ research (once per issue, cached)
+  │
+  └─ attempt:
+       implement ─▶ lint ─▶ clean-code gate
+         │  (deterministic tools, no model — a failure here retries
+         │   without consuming a review cycle)
+         ▼
+       3 reviewers in parallel, separate processes
+         ▼
+       controller ─▶ master review
+         ├─ approve ─▶ commit ─▶ PR ─▶ update governance ─▶ next issue
+         ├─ reject  ─▶ attempts_controller++ ─▶ retry, or split at max
+         └─ master takes over ─▶ attempts_master++ ─▶ retry, or abort at max
+```
+
+Increment `runs_used` once per implementation attempt, regardless of which role implemented. Check the budget before starting an attempt, not after.
+
+## Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--unattended` | off | Skips per-step confirmation; requires the pre-loop confirmation to have passed |
+| `--auto-merge` | off | Merges an approved PR |
+| `--dry-run` | off | Renders prompts and prints the plan without calling a model |
+| `--issue <id>` | — | Runs a single issue |
+
+`--unattended` and `--auto-merge` both prompt once at startup, before the loop, and refuse to proceed on a non-interactive stdin unless an explicit `--yes` accompanies them. pi has no permission dialog and `pi -p` has no UI, so this startup gate is the only place a human can intervene.
+
+`--dry-run` is worth building early: it is the cheapest way to verify routing and prompt assembly without spending a single call.
+
+## Logging
+
+One JSONL event per step: timestamp, issue, role, model, exit status, token usage where available, and the path to the rendered prompt. Enough to answer "why did issue-42 cost 60 calls" after the fact.
+
+Never log secrets or full file contents. Log the prompt path, not the prompt.
+
+## Invariants
+
+Verify these when generating or re-syncing. A pipeline that violates one is wrong even if it runs.
+
+1. Every model invocation reads its model from the governance mapping. No literal model string in the script body.
+2. Reviewers run in separate processes and receive no sibling verdicts.
+3. Counters are read from and written to the state file only.
+4. The budget check precedes every attempt.
+5. Deterministic gates run before any model-based review.
+6. The master review runs on every attempt.
+7. Abort writes to `MEMORY.md` before exiting.
+8. Without `--unattended`, no privileged step proceeds unconfirmed.

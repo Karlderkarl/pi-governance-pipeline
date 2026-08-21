@@ -1,0 +1,34 @@
+{
+  "name": "pi-governance-pipeline",
+  "version": "0.1.0",
+  "description": "Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, severity-based gating, and hard run budgets.",
+  "keywords": [
+    "pi-package",
+    "pi-skill",
+    "governance",
+    "prd",
+    "agents-md",
+    "multi-model-review",
+    "auto-develop",
+    "pipeline"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "skills",
+    "extensions",
+    "prompts",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "skills": ["./skills"],
+    "extensions": ["./extensions"],
+    "prompts": ["./prompts"]
+  }
+}
