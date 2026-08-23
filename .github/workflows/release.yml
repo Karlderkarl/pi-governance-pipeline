@@ -17,7 +17,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # publish the GitHub Release for the tag
       id-token: write # required: this is what mints the OIDC token
     steps:
       - uses: actions/checkout@v5
@@ -51,3 +51,11 @@ jobs:
 
       - name: Publish
         run: npm publish
+
+      # The GitHub Release comes last: it only exists when the tarball it
+      # points at is already on npm. Notes are generated from the commits
+      # since the previous tag.
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
