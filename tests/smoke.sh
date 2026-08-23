@@ -143,4 +143,114 @@ out="$(cd "$proj2" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (dr
 echo "$out" | grep -q "dropped" || fail "no_self_review did not drop the colliding reviewer: $out"
 echo "$out" | grep -q "review.quality" || fail "non-colliding reviewers must still run: $out"
 
+# validator: review.* == implement_master must warn — the dangerous direction,
+# where the drop lands exactly when the master path starts
+cat > "$TMP/warn-master.md" <<'MD'
+# A
+```yaml
+models:
+  implement:        { provider: a, model: m1 }
+  implement_master: { provider: b, model: m2 }
+  review:
+    security:    { provider: b, model: m2 }
+    quality:     { provider: c, model: m3 }
+    correctness: { provider: d, model: m4 }
+```
+MD
+node "$LIB/governance.mjs" config "$TMP/warn-master.md" 2>&1 >/dev/null \
+  | grep -q "equals models.implement_master" \
+  || fail "review.* == implement_master produced no warning"
+
+# ---------------------------------------------------------------- e2e: escalated no_self_review
+# review.security == implement_master: the reviewer runs while the controller
+# implements and is dropped once the master path starts. Regression guard: its
+# stale verdict must not gate the master attempts (permanent deadlock), and the
+# unparseable-output retry must never resurrect the dropped reviewer.
+proj3="$TMP/run-master-drop"; mkdir -p "$proj3/.pipeline/lib"
+cp "$SH" "$proj3/auto-develop.sh"; cp "$LIB"/*.mjs "$proj3/.pipeline/lib/"
+cat > "$proj3/AGENTS.md" <<'MD'
+# A
+```yaml
+models:
+  implement:        { provider: a, model: impl }
+  implement_master: { provider: b, model: master-impl }
+  review:
+    security:    { provider: b, model: master-impl }
+    quality:     { provider: c, model: q }
+    correctness: { provider: d, model: r }
+budgets:
+  max_attempts_controller: 1
+  max_attempts_master: 2
+  max_runs_per_tree: 50
+```
+MD
+printf -- "- [ ] issue-3: escalated self review\n" > "$proj3/tasks.md"
+
+# A stub pi whose answer depends on the prompt it receives; logs every call.
+stub="$TMP/stub-bin"; mkdir -p "$stub"
+cat > "$stub/pi" <<'EOF'
+#!/usr/bin/env bash
+for last; do :; done   # the prompt is the final argument
+case "$last" in
+  *"Gather context"*)       echo research >> "${PI_CALLS_LOG:?}"; echo "research notes" ;;
+  *"Implement this issue"*) echo implement >> "${PI_CALLS_LOG:?}" ;;
+  *"concern only: security"*)
+    echo review-security >> "${PI_CALLS_LOG:?}"
+    echo '{"role":"security","verdict":"reject","findings":[{"severity":"high","file":"f","line":1,"title":"stale-marker","rationale":"r","suggestion":"s"}]}' ;;
+  *"concern only: quality"*)
+    echo review-quality >> "${PI_CALLS_LOG:?}"
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  *"concern only: correctness"*)
+    echo review-correctness >> "${PI_CALLS_LOG:?}"
+    echo '{"role":"correctness","verdict":"approve","findings":[]}' ;;
+  *"Merge these reviewer"*) echo controller >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
+  *"Decide this attempt"*)  echo master >> "${PI_CALLS_LOG:?}"
+    echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo unknown >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
+esac
+EOF
+chmod +x "$stub/pi"
+
+rc=0
+out="$(cd "$proj3" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls3.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "escalated no_self_review deadlocked — a stale verdict gated the master attempts (rc=$rc): $out"
+grep -q '"reviewers_used": 2' "$proj3/.pipeline/work/issue-3/gate.json" \
+  || fail "gate must count only this attempt's reviewers: $(cat "$proj3/.pipeline/work/issue-3/gate.json")"
+if grep -q "stale-marker" "$proj3/.pipeline/work/issue-3/gate.json"; then
+  fail "stale finding from the dropped reviewer reached the gate"
+fi
+[[ "$(grep -c review-security "$TMP/calls3.log")" -eq 1 ]] \
+  || fail "dropped reviewer ran beyond its pre-drop attempt (retry resurrection?): $(cat "$TMP/calls3.log")"
+echo "$out" | grep -q "dropped" || fail "drop not logged: $out"
+
+# ---------------------------------------------------------------- e2e: lint feedback
+# A failing LINT_CMD must feed its output back into exclusions.md — otherwise
+# the retry re-runs the identical prompt and learns nothing.
+proj4="$TMP/run-lint"; mkdir -p "$proj4/.pipeline/lib"
+cp "$SH" "$proj4/auto-develop.sh"; cp "$LIB"/*.mjs "$proj4/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj4/AGENTS.md"
+printf -- "- [ ] issue-4: lint feedback\n" > "$proj4/tasks.md"
+rc=0
+out="$(cd "$proj4" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls4.log" \
+  LINT_CMD='echo "lint-broke: missing semicolon"; false' bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "persistent lint failure should exhaust the budget and block, not pass"
+grep -q "lint-broke: missing semicolon" "$proj4/.pipeline/work/issue-4/exclusions.md" \
+  || fail "lint output never reached exclusions.md: $(cat "$proj4/.pipeline/work/issue-4/exclusions.md")"
+
+# ---------------------------------------------------------------- capture_diff cap
+# An oversized diff must be truncated at DIFF_MAX_BYTES — and portably so
+# (dd, not GNU-only head -c). Runs a dry-run: capture_diff executes before the
+# dry-run stop, no model calls needed.
+proj5="$TMP/run-cap"; mkdir -p "$proj5/.pipeline/lib"
+cp "$SH" "$proj5/auto-develop.sh"; cp "$LIB"/*.mjs "$proj5/.pipeline/lib/"
+printf -- "- [ ] issue-5: big diff\n" > "$proj5/tasks.md"
+git -C "$proj5" init -q
+git -C "$proj5" -c user.email=t@t -c user.name=t commit -qm init --allow-empty
+dd if=/dev/zero bs=100000 count=1 2>/dev/null | tr '\0' 'x' > "$proj5/big.txt"
+out="$(cd "$proj5" && DIFF_MAX_BYTES=1024 bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (cap case) failed: $out"
+grep -q "diff truncated at 1024 bytes" "$proj5/.pipeline/work/issue-5/diff.patch" \
+  || fail "oversized diff not truncated: $(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch") bytes"
+[[ "$(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch")" -lt 2048 ]] \
+  || fail "truncated diff still too large"
+
 echo "smoke OK"

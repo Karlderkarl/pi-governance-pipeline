@@ -209,12 +209,21 @@ export function validate(config) {
 		);
 	}
 	const noSelfReview = m.constraints?.no_self_review ?? true;
-	if (impl && noSelfReview) {
+	if (noSelfReview) {
 		for (const r of REVIEWERS) {
 			const reviewer = modelRef(m.review?.[r]);
-			if (reviewer && reviewer === impl) {
+			if (!reviewer) continue;
+			if (impl && reviewer === impl) {
 				warnings.push(
 					`AGENTS.md models.review.${r} (${reviewer}) equals models.implement; no_self_review drops it at run time, leaving fewer reviewers`,
+				);
+			}
+			// The dangerous direction: the reviewer runs on the controller's
+			// attempts and is dropped exactly when the master path starts — its
+			// last verdict would otherwise linger and deadlock the issue.
+			if (master && reviewer === master) {
+				warnings.push(
+					`AGENTS.md models.review.${r} (${reviewer}) equals models.implement_master; no_self_review drops it on the escalated path, where a lingering verdict would deadlock the issue`,
 				);
 			}
 		}

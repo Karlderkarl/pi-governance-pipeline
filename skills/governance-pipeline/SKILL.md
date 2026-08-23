@@ -35,7 +35,7 @@ node .pipeline/lib/governance.mjs config AGENTS.md   # validate before the first
 ./auto-develop.sh --dry-run                          # routing and prompts, zero model calls
 ```
 
-**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead) and the commit/PR/governance-update step (a marked stub). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
+**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
 
 The package also ships `pipeline-guard`, an extension that blocks privileged bash commands and unconfirmed governance writes, exposes the `pipeline_state` tool, and adds `/pipeline-status`. It is the interactive counterpart to the script's startup gate — see the package README.
 

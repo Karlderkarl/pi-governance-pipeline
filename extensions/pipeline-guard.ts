@@ -7,7 +7,11 @@
  * the pipeline state the harness owns, so the model can read counters without
  * ever holding them.
  *
- * Off-switch: PIPELINE_GUARD=off. Unattended runs: PIPELINE_UNATTENDED=1.
+ * Off-switch: PIPELINE_GUARD=off. Unattended runs: PIPELINE_UNATTENDED=1 skips
+ * the privileged-command confirmations (a human pre-answered them at the
+ * pipeline's startup gate). Governance writes keep their own gate
+ * (PIPELINE_ALLOW_GOVERNANCE_WRITE) in every mode — a pipeline run must never
+ * rewrite the contract it runs on.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -66,9 +70,12 @@ export default function (pi: ExtensionAPI) {
 	const unattended = process.env.PIPELINE_UNATTENDED === "1";
 
 	pi.on("tool_call", async (event, ctx) => {
-		if (!enabled || unattended) return;
+		if (!enabled) return;
 
 		if (isToolCallEventType("bash", event)) {
+			// Unattended pre-approval covers privileged commands only; the
+			// governance-write gate below stays armed regardless.
+			if (unattended) return;
 			const command = event.input.command ?? "";
 			const hit = PRIVILEGED.find((entry) => entry.pattern.test(command));
 			if (!hit) return;

@@ -30,19 +30,19 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.4
+pi install npm:pi-governance-pipeline@1.0.5
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.4
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.5
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.4
+pi -e npm:pi-governance-pipeline@1.0.5
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@1.1.0
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.1.0
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.5
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
 Drop the `@version` if you would rather track the latest release.
@@ -136,6 +136,8 @@ that in two places, not one:
 - Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
   the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
   human already approved. The two halves of the safety rule meet at this variable.
+  It covers privileged commands only — governance writes stay gated even in an
+  unattended run, under their own switch.
 
 | Variable | Effect |
 |---|---|
@@ -143,6 +145,18 @@ that in two places, not one:
 | `PIPELINE_UNATTENDED=1` | Allows privileged commands without a prompt |
 | `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` | Allows the govern step to write governance non-interactively |
 | `PIPELINE_ALLOW_DEEP_SPLIT=1` | Accepts `max_split_depth > 1` |
+
+## Releasing (maintainers)
+
+Publish happens only from a pushed tag — never from a local machine. The release
+workflow runs `tests/smoke.sh` first and then publishes via npm Trusted Publishing
+(OIDC), which attaches a provenance attestation. A local `npm publish` bypasses
+both and puts a tarball on the registry that the chain never verified.
+
+```bash
+# bump version in package.json, update the install examples above, commit, then:
+git tag v1.0.5 && git push origin v1.0.5
+```
 
 ## License
 

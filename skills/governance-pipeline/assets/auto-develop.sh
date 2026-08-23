@@ -24,6 +24,10 @@ MEMORY_FILE="${MEMORY_FILE:-$ROOT/MEMORY.md}"
 ISSUE_SOURCE="${ISSUE_SOURCE:-$ROOT/tasks.md}"   # adapt: gh issue list, jira, ...
 LINT_CMD="${LINT_CMD:-}"                          # adapt: npm run lint, ruff, ...
 TEST_CMD="${TEST_CMD:-}"                          # adapt: npm test, pytest, ...
+# The diff is prompt input — cap it like every other excerpt, or an unignored
+# build directory flushes into every reviewer prompt on every attempt.
+DIFF_MAX_BYTES="${DIFF_MAX_BYTES:-65536}"
+[[ "$DIFF_MAX_BYTES" =~ ^[0-9]+$ ]] || DIFF_MAX_BYTES=65536
 
 UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""
 FAILED_ISSUES=()
@@ -83,7 +87,7 @@ log_event() { # log_event <root> <issue> <role> <model> <status> <prompt_path>
   node -e '
     const [file,ts,issue,role,model,status,prompt]=process.argv.slice(1);
     require("node:fs").appendFileSync(file, JSON.stringify({ts,issue,role,model,status,prompt})+"\n");
-  ' "$dir/$RUN_ID.jsonl" "$(date -Is)" "$2" "$3" "$4" "$5" "$6"
+  ' "$dir/$RUN_ID.jsonl" "$(date +%Y-%m-%dT%H:%M:%S%z)" "$2" "$3" "$4" "$5" "$6"
 }
 
 # ------------------------------------------------------------------- runners
@@ -175,9 +179,19 @@ capture_diff() { # <outfile>
   local f
   git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
     case "$f" in .pipeline/*|"") continue ;; esac
+    if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
+      printf '\n--- new file (untracked, binary — omitted): %s ---\n' "$f" >> "$out"
+      continue
+    fi
     printf '\n--- new file (untracked): %s ---\n' "$f" >> "$out"
     cat "$ROOT/$f" >> "$out" 2>/dev/null || true
   done || true
+  if (( $(wc -c < "$out") > DIFF_MAX_BYTES )); then
+    # dd, not head -c: BSD/macOS head has no -c. One block read = first N bytes.
+    dd if="$out" of="$out.trunc" bs="$DIFF_MAX_BYTES" count=1 2>/dev/null
+    printf '\n[diff truncated at %s bytes; the rest is in the working tree]\n' "$DIFF_MAX_BYTES" >> "$out.trunc"
+    mv "$out.trunc" "$out"
+  fi
 }
 
 # --------------------------------------------------------------------- issues
@@ -192,7 +206,7 @@ block_issue() { # <issue_id> <reason> — never silent: MEMORY.md, state, human
     state issue "$PIPELINE_DIR" "$1" "$1" blocked >/dev/null || true
   {
     echo ""
-    echo "## Blocker — $1 ($(date -I))"
+    echo "## Blocker — $1 ($(date +%Y-%m-%d))"
     echo ""
     echo "$2"
   } >> "$MEMORY_FILE"
@@ -278,9 +292,21 @@ $(cat "$work/exclusions.md")"
     fi
 
     # Deterministic gates first. A lint failure must not consume a review cycle.
+    # The failure output goes into exclusions.md — without it the retry re-runs
+    # the identical prompt, learns nothing, and burns the whole tree budget.
     if (( ! DRY_RUN )); then
-      [[ -n "$LINT_CMD" ]] && { eval "$LINT_CMD" || { echo "lint failed; retrying implementation" >&2; continue; }; }
-      [[ -n "$TEST_CMD" ]] && { eval "$TEST_CMD" || { echo "tests failed; retrying implementation" >&2; continue; }; }
+      [[ -n "$LINT_CMD" ]] && { eval "$LINT_CMD" > "$work/lint.log" 2>&1 || {
+        echo "lint failed; feeding the output back and retrying implementation" >&2
+        { echo "--- lint failed (attempt $((ctrl_attempts + master_attempts))) ---"
+          excerpt "$work/lint.log" 80; echo; } >> "$work/exclusions.md"
+        continue
+      }; }
+      [[ -n "$TEST_CMD" ]] && { eval "$TEST_CMD" > "$work/test.log" 2>&1 || {
+        echo "tests failed; feeding the output back and retrying implementation" >&2
+        { echo "--- tests failed (attempt $((ctrl_attempts + master_attempts))) ---"
+          excerpt "$work/test.log" 80; echo; } >> "$work/exclusions.md"
+        continue
+      }; }
     fi
 
     capture_diff "$work/diff.patch"
@@ -289,19 +315,29 @@ $(cat "$work/exclusions.md")"
     # no_self_review: the model that wrote the diff never reviews it. When both
     # sides resolve to "default" a collision cannot be proven, so the drop only
     # applies to explicitly mapped models — map at least the implement roles.
+    # `ran`/`ran_focus` record exactly the reviewers started in THIS attempt,
+    # in order. Gate, controller, master, and the retry loop consume this list —
+    # never a directory glob — so a verdict written before a reviewer was
+    # dropped cannot outlive its diff and gate attempts it never reviewed.
     local impl_model; impl_model="$(model_for "$role")"
-    local pids=() focus rmodel
+    local pids=() ran=() ran_focus=() ran_n=0 focus rmodel
     for focus in security quality correctness; do
       rmodel="$(model_for "review.$focus")"
       if [[ "$NO_SELF_REVIEW" == "true" && "$impl_model" != "default" && "$rmodel" == "$impl_model" ]]; then
         echo "no_self_review: reviewer $focus dropped — $rmodel implemented this diff" >&2
         log_event "$root" "$issue_id" "review.$focus" "$rmodel" "dropped-self-review" "-"
+        # A leftover file is a verdict on a different diff by a reviewer that
+        # is now disqualified. Remove it so nothing downstream can read it.
+        (( DRY_RUN )) || rm -f "$work/review-$focus.json"
         continue
       fi
       run_role "$root" "$issue_id" "review.$focus" \
         "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")" \
         "$work/review-$focus.json" &
       pids+=($!)
+      ran+=("$work/review-$focus.json")
+      ran_focus+=("$focus")
+      ran_n=$((ran_n+1))
     done
     for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || true; done
 
@@ -309,29 +345,45 @@ $(cat "$work/exclusions.md")"
 
     # One retry per reviewer whose output is not parseable JSON, as specified
     # in prompt-builders.md. Still unparseable afterwards: gate.mjs treats the
-    # reviewer as unavailable and gates on the rest.
-    for focus in security quality correctness; do
-      [[ -f "$work/review-$focus.json" ]] || continue
-      if ! node "$LIB/gate.mjs" --check "$work/review-$focus.json" >/dev/null 2>&1; then
+    # reviewer as unavailable and gates on the rest. Only this attempt's
+    # reviewers (ran) are eligible — the retry must never resurrect a dropped
+    # reviewer to review its own implementation.
+    local i rfile
+    for (( i = 0; i < ran_n; i++ )); do
+      focus="${ran_focus[$i]}"; rfile="${ran[$i]}"
+      [[ -f "$rfile" ]] || continue
+      if ! node "$LIB/gate.mjs" --check "$rfile" >/dev/null 2>&1; then
         echo "reviewer $focus returned unparseable JSON; one retry with an explicit reminder" >&2
         run_role "$root" "$issue_id" "review.$focus" \
           "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")
 
 REMINDER: your previous output was not parseable. Emit ONLY the JSON object — no prose, no code fence." \
-          "$work/review-$focus.json" || true
+          "$rfile" || true
       fi
     done
 
-    local gate_status=0
-    node "$LIB/gate.mjs" --blocking "$BLOCKING" --followup "$FOLLOWUP" \
-      "$work"/review-*.json > "$work/gate.json" || gate_status=$?
+    # Gate, controller, and master consume exactly this attempt's reviewers —
+    # the explicit ran list, never a glob of whatever files happen to exist.
+    local gate_status=0 reviewers_json
+    if (( ran_n > 0 )); then
+      node "$LIB/gate.mjs" --blocking "$BLOCKING" --followup "$FOLLOWUP" \
+        "${ran[@]}" > "$work/gate.json" || gate_status=$?
+      reviewers_json="$(cat "${ran[@]}")"
+    else
+      # Every reviewer was dropped this attempt (e.g. all equal
+      # implement_master). Gating on nothing is not a gate: fail closed.
+      printf '%s\n' '{"verdict":"blocked","reviewers_used":0,"reviewers_unavailable":["all dropped by no_self_review"],"blocking":[],"followups":[]}' \
+        > "$work/gate.json"
+      gate_status=4
+      reviewers_json="(no reviewer output: every reviewer was dropped by no_self_review in this attempt)"
+    fi
 
     # The controller proposes on a weak model; the master decides and sees the
     # original reviewer JSON, so an aggregation error is catchable.
     run_role "$root" "$issue_id" controller \
       "Merge these reviewer JSON objects. Deduplicate findings naming the same file and line, apply the severity rule (blocking: $BLOCKING), and propose a verdict. You do not decide; the master sees the originals regardless. Emit only JSON.
 
-$(cat "$work"/review-*.json)" "$work/controller.json" || true
+$reviewers_json" "$work/controller.json" || true
 
     run_role "$root" "$issue_id" master_review \
       "Decide this attempt. Check the controller's arithmetic against the original reviewer JSON rather than trusting it.
@@ -343,7 +395,7 @@ Diff:
 $(cat "$work/diff.patch")
 
 Original reviewer output:
-$(cat "$work"/review-*.json)
+$reviewers_json
 
 Controller proposal:
 $(cat "$work/controller.json")
@@ -385,7 +437,7 @@ Emit ONLY this JSON, no prose and no code fence:
     fi
 
     if [[ "$decision" == "take_over" ]]; then
-      echo "master review takes over: next attempt is implement_master, fresh from the issue" >&2
+      echo "master review takes over: implement_master re-implements from the issue, with the findings so far attached" >&2
       ctrl_attempts=$MAX_CTRL
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state escalate "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null
     fi
@@ -410,7 +462,9 @@ main() {
     process_issue "$line"
   done <<< "$issues"
   # A blocked or aborted issue is not "approved": the run exits non-zero.
-  if (( ${#FAILED_ISSUES[@]} > 0 )); then
+  # Element-0 test instead of ${#arr[@]}: on bash < 4.4 (macOS ships 3.2) the
+  # length expansion of an empty array trips set -u — same class pids guards.
+  if [[ ${FAILED_ISSUES[0]+_} ]]; then
     echo "blocked: ${FAILED_ISSUES[*]}" >&2
     return 1
   fi
