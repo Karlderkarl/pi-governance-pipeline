@@ -153,9 +153,11 @@ that in two places, not one:
 Publish happens only from a pushed tag — never from a local machine. The release
 workflow runs `tests/smoke.sh` first and then publishes via npm Trusted Publishing
 (OIDC), which attaches a provenance attestation. Once the tarball is on the
-registry, the same workflow creates the GitHub Release for the tag with notes
-generated from the commits since the previous tag. A local `npm publish` bypasses
-both and puts a tarball on the registry that the chain never verified.
+registry, the same workflow creates the GitHub Release for the tag — from
+`release-notes.md` at the repo root when you pre-seed curated notes there
+(`### Fixed` / `### Added` / `### Changed` plus a compare link), otherwise with
+notes generated from the commits since the previous tag. A local `npm publish`
+bypasses both and puts a tarball on the registry that the chain never verified.
 
 ```bash
 # bump version in package.json, update the install examples above, commit, then:
