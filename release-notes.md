@@ -1,13 +1,13 @@
-Keeps internal notes out of model prompts, unglues the exclusion-cap marker, archives one prompt per attempt, and teaches the release workflow to read curated notes from `release-notes.md`.
+Guards the release workflow against stale curated notes, pulls the README examples up to the version they describe, and finishes the prompt-hygiene pass around the exclusion block.
 
 ### Fixed
-- A script comment (`# tail, not head …`) sat inside the implement-prompt heredoc and leaked into every retry prompt; it now lives outside the heredoc like all other comments.
-- The `[older blocks omitted]` marker glued itself to the first kept line (`…kept]lint-line-46`) because command substitution strips the trailing newline; the block is now printed line by line.
-- The GitHub Release step now actually honors a pre-seeded `release-notes.md` (`--notes-file`), as the README already claimed — the claim outran the implementation in f91f3d4.
+- `release-notes.md` had no freshness guard: tagging without touching the file would have silently published the previous release's notes, including a compare link for the wrong range. The workflow now only uses the file when it names the tag being released, and otherwise falls back to generated notes — generic, but never wrong.
+- The README install examples pinned `@1.0.5` while the registry already served 1.0.6; they now track the release, and the example tag command uses a `vX.Y.Z` placeholder instead of an already-taken tag.
+- The blank line between the exclusion block and the closing instruction was lost in the glue fix: after a long lint block the prompt's only imperative line stuck to the last finding. Separated again; smoke pins it.
+- `You have 1 attempts left` — singular now spells correctly.
 
 ### Changed
-- Prompt archive keeps **one file per role and attempt** (`<issue>-<role>-a<N>[-retry]-<run>.txt`) instead of overwriting per role, so retry loops stay debuggable — including which exclusion block survived the cap on attempts 1..N-1.
-- The unreachable all-reviewers-dropped `gate.json` branch now carries `min_reviewers`, matching the `gate.mjs` output shape.
-- README documents the script tuning variables (`DIFF_MAX_BYTES`, `EXCLUSIONS_MAX_LINES`, `MIN_REVIEWERS`) with their defaults.
+- Attempt tags in the prompt archive are zero-padded (`a01`…`a20`), so plain `ls` sorts them chronologically past attempt 9.
+- The release checklist explicitly calls for seeding `release-notes.md` alongside the version bump.
 
-**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.5...v1.0.6
+**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.6...v1.0.7

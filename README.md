@@ -32,18 +32,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.5
+pi install npm:pi-governance-pipeline@1.0.7
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.5
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.7
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.5
+pi -e npm:pi-governance-pipeline@1.0.7
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.5
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.7
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -169,8 +169,9 @@ notes generated from the commits since the previous tag. A local `npm publish`
 bypasses both and puts a tarball on the registry that the chain never verified.
 
 ```bash
-# bump version in package.json, update the install examples above, commit, then:
-git tag v1.0.5 && git push origin v1.0.5
+# bump version in package.json, update the install examples above,
+# seed release-notes.md for the tag, commit, then:
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 ## License

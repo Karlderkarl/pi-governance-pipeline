@@ -330,6 +330,12 @@ grep -q "older blocks omitted" "$last_prompt" \
   || fail "exclusion cap marker missing in the implement prompt"
 if grep -q "kept]lint-line" "$last_prompt"; then fail "cap marker glued to the first kept line"; fi
 if grep -q "tail, not head" "$last_prompt"; then fail "script comment leaked into the prompt"; fi
+# The closing instruction must not glue to the last lint line, and the
+# singular must be spelled correctly (the last master attempt has left=1).
+[[ -z "$(grep -B1 'You have' "$last_prompt" | head -1)" ]] \
+  || fail "missing blank line before the closing instruction"
+grep -q 'You have 1 attempt left' "$last_prompt" \
+  || fail "singular attempt count broken"
 [[ "$(wc -l < "$last_prompt")" -lt 320 ]] \
   || fail "implement prompt not bounded: $(wc -l < "$last_prompt") lines"
 # The newest prompt was rendered before the newest lint run, so the latest

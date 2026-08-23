@@ -178,7 +178,8 @@ $( if [[ -s "$3" ]]; then
      fi
      tail -n "$EXCLUSIONS_MAX_LINES" "$3"
    fi )
-You have $4 attempts left. Change the code only; do not edit governance files.
+
+You have $4 attempt$( (( $4 == 1 )) || printf 's' ) left. Change the code only; do not edit governance files.
 Leave your changes uncommitted in the working tree — the reviewers read the
 working-tree diff, and committed work would be invisible to them.
 EOF
@@ -290,6 +291,8 @@ $(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
     fi
 
     local attempt_n=$(( ctrl_attempts + master_attempts + 1 ))
+    # Zero-padded so the prompt archive sorts chronologically in plain ls.
+    local att; att="$(printf 'a%02d' "$attempt_n")"
     local role="implement" left=$(( MAX_CTRL - ctrl_attempts ))
     if (( ctrl_attempts >= MAX_CTRL )); then
       role="implement_master"; left=$(( MAX_MASTER - master_attempts ))
@@ -303,7 +306,7 @@ $(cat "$work/exclusions.md")"
 
     run_role "$root" "$issue_id" "$role" \
       "$(build_implement_prompt "$issue_line" "$work/research.md" "$work/exclusions.md" "$left")" \
-      "$work/implement.log" "a$attempt_n" || true
+      "$work/implement.log" "$att" || true
 
     if [[ "$role" == "implement" ]]; then ctrl_attempts=$((ctrl_attempts+1)); else master_attempts=$((master_attempts+1)); fi
     if (( ! DRY_RUN )); then
@@ -353,7 +356,7 @@ $(cat "$work/exclusions.md")"
       fi
       run_role "$root" "$issue_id" "review.$focus" \
         "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")" \
-        "$work/review-$focus.json" "a$attempt_n" &
+        "$work/review-$focus.json" "$att" &
       pids+=($!)
       ran+=("$work/review-$focus.json")
       ran_focus+=("$focus")
@@ -379,7 +382,7 @@ $(cat "$work/exclusions.md")"
           "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")
 
 REMINDER: your previous output was not parseable. Emit ONLY the JSON object — no prose, no code fence." \
-          "$rfile" "a$attempt_n-retry" || true
+          "$rfile" "$att-retry" || true
       fi
     done
 
@@ -406,7 +409,7 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
     run_role "$root" "$issue_id" controller \
       "Merge these reviewer JSON objects. Deduplicate findings naming the same file and line, apply the severity rule (blocking: $BLOCKING), and propose a verdict. You do not decide; the master sees the originals regardless. Emit only JSON.
 
-$reviewers_json" "$work/controller.json" "a$attempt_n" || true
+$reviewers_json" "$work/controller.json" "$att" || true
 
     run_role "$root" "$issue_id" master_review \
       "Decide this attempt. Check the controller's arithmetic against the original reviewer JSON rather than trusting it.
@@ -432,7 +435,7 @@ Outcomes:
 - take_over: the approach itself is wrong; a stronger model implements the next attempt fresh from the issue
 
 Emit ONLY this JSON, no prose and no code fence:
-{\"decision\":\"approve|reject|take_over\",\"reasons\":[\"...\"]}" "$work/master.txt" "a$attempt_n" || true
+{\"decision\":\"approve|reject|take_over\",\"reasons\":[\"...\"]}" "$work/master.txt" "$att" || true
 
     # The verdict is machine-readable and fail-closed: anything that is not a
     # parseable decision counts as reject. Never grep prose for a verdict.
