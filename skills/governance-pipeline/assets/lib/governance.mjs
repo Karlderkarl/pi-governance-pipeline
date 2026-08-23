@@ -4,11 +4,14 @@
 //
 //   node governance.mjs config  <AGENTS.md>              -> merged config as JSON
 //   node governance.mjs model   <AGENTS.md> <role.path>  -> "provider/model" or "default"
-//   node governance.mjs state init    <dir> <root_id>
-//   node governance.mjs state show    <dir> <root_id>
-//   node governance.mjs state issue   <dir> <root_id> <issue_id> [status]
-//   node governance.mjs state attempt <dir> <root_id> <issue_id> controller|master
-//   node governance.mjs state budget  <dir> <root_id>    -> exit 0 = budget left, 3 = exhausted
+//   node governance.mjs models  <AGENTS.md>              -> JSON map of every role to its model
+//   node governance.mjs state init     <dir> <root_id>
+//   node governance.mjs state show     <dir> <root_id>
+//   node governance.mjs state issue    <dir> <root_id> <issue_id> [status]
+//   node governance.mjs state attempt  <dir> <root_id> <issue_id> controller|master
+//   node governance.mjs state attempts <dir> <root_id> <issue_id> -> counters + status as JSON
+//   node governance.mjs state escalate <dir> <root_id> <issue_id> -> force the master path
+//   node governance.mjs state budget   <dir> <root_id> -> exit 0 = budget left, 3 = exhausted
 //
 // Exit codes: 0 ok, 1 usage/IO error, 2 contract validation failed, 3 budget exhausted.
 
@@ -174,6 +177,7 @@ export function resolveModel(config, rolePath) {
 // only shows up as bad reviews, never as an error.
 export function validate(config) {
 	const errors = [];
+	const warnings = [];
 	const m = config.models ?? {};
 	const impl = modelRef(m.implement);
 	const master = modelRef(m.implement_master);
@@ -197,7 +201,25 @@ export function validate(config) {
 			`AGENTS.md budgets.max_split_depth is ${b.max_split_depth}; depth above 1 grows exponentially. Set PIPELINE_ALLOW_DEEP_SPLIT=1 to override deliberately`,
 		);
 	}
-	return errors;
+	// Warnings: legal configurations that defeat the point of the design.
+	const masterReview = modelRef(m.master_review);
+	if (master && masterReview && master === masterReview) {
+		warnings.push(
+			`AGENTS.md models.master_review (${masterReview}) equals models.implement_master; the escalated model would review its own work`,
+		);
+	}
+	const noSelfReview = m.constraints?.no_self_review ?? true;
+	if (impl && noSelfReview) {
+		for (const r of REVIEWERS) {
+			const reviewer = modelRef(m.review?.[r]);
+			if (reviewer && reviewer === impl) {
+				warnings.push(
+					`AGENTS.md models.review.${r} (${reviewer}) equals models.implement; no_self_review drops it at run time, leaving fewer reviewers`,
+				);
+			}
+		}
+	}
+	return { errors, warnings };
 }
 
 /* ------------------------------------------------------------- state store */
@@ -255,6 +277,29 @@ function stateCommand(args, config) {
 			state.runs_used += 1;
 			return saveState(dir, rootId, state);
 		}
+		case "attempts": {
+			const [issueId] = rest;
+			if (!issueId) usage();
+			const state = loadState(dir, rootId);
+			const issue = state.issues[issueId] ?? { attempts_controller: 0, attempts_master: 0, status: "open" };
+			// Read back on resume: a crashed run restarts with its counters, not from zero.
+			return {
+				controller: issue.attempts_controller,
+				master: issue.attempts_master,
+				status: issue.status ?? "open",
+			};
+		}
+		case "escalate": {
+			const [issueId] = rest;
+			if (!issueId) usage();
+			const state = loadState(dir, rootId);
+			const issue = (state.issues[issueId] ??= { attempts_controller: 0, attempts_master: 0, status: "open" });
+			// The master takes over: the controller path is exhausted by decision,
+			// not by counting further attempts. runs_used is untouched — no
+			// implementation attempt happened here.
+			issue.attempts_controller = config.budgets.max_attempts_controller;
+			return saveState(dir, rootId, state);
+		}
 		case "budget": {
 			const state = loadState(dir, rootId);
 			const left = state.max_runs_per_tree - state.runs_used;
@@ -275,9 +320,12 @@ function usage() {
 			"usage:",
 			"  governance.mjs config  <AGENTS.md>",
 			"  governance.mjs model   <AGENTS.md> <role.path>",
+			"  governance.mjs models  <AGENTS.md>",
 			"  governance.mjs state init|show|budget <dir> <root_id>",
-			"  governance.mjs state issue   <dir> <root_id> <issue_id> [status]",
-			"  governance.mjs state attempt <dir> <root_id> <issue_id> controller|master",
+			"  governance.mjs state issue    <dir> <root_id> <issue_id> [status]",
+			"  governance.mjs state attempt  <dir> <root_id> <issue_id> controller|master",
+			"  governance.mjs state attempts <dir> <root_id> <issue_id>",
+			"  governance.mjs state escalate <dir> <root_id> <issue_id>",
 			"",
 			`roles: ${ROLES.join(", ")}, review.${REVIEWERS.join(", review.")}`,
 		].join("\n") + "\n",
@@ -288,6 +336,17 @@ function usage() {
 function main(argv) {
 	const [command, ...args] = argv;
 	if (!command) usage();
+	if (command === "models") {
+		const [agentsPath] = args;
+		if (!agentsPath) usage();
+		const { config, warnings } = readConfig(agentsPath);
+		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
+		const resolved = {};
+		for (const role of ROLES) resolved[role] = resolveModel(config, role);
+		for (const r of REVIEWERS) resolved[`review.${r}`] = resolveModel(config, `review.${r}`);
+		process.stdout.write(`${JSON.stringify(resolved)}\n`);
+		return;
+	}
 	if (command === "config" || command === "model") {
 		const [agentsPath, rolePath] = args;
 		if (!agentsPath) usage();
@@ -298,7 +357,8 @@ function main(argv) {
 			process.stdout.write(`${resolveModel(config, rolePath)}\n`);
 			return;
 		}
-		const errors = validate(config);
+		const { errors, warnings: contractWarnings } = validate(config);
+		for (const w of contractWarnings) process.stderr.write(`contract warning: ${w}\n`);
 		if (errors.length > 0) {
 			for (const e of errors) process.stderr.write(`contract error: ${e}\n`);
 			process.exit(2);
@@ -307,7 +367,8 @@ function main(argv) {
 		return;
 	}
 	if (command === "state") {
-		const { config } = readConfig(process.env.GOVERNANCE_AGENTS ?? "AGENTS.md");
+		const { config, warnings } = readConfig(process.env.GOVERNANCE_AGENTS ?? "AGENTS.md");
+		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
 		const result = stateCommand(args, config);
 		if (result) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		return;

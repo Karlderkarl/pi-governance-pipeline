@@ -90,9 +90,21 @@ It runs a weak model, so keep its job mechanical: deduplicate findings that name
 
 Input: issue, diff, the **original** reviewer JSON objects, the controller's proposal, and the attempt count.
 
-Its task is to decide, and to check the controller's arithmetic rather than trust it. Give it three outcomes: approve, reject with reasons, or take over the implementation itself.
+Its task is to decide, and to check the controller's arithmetic rather than trust it. It has three outcomes: `approve`, `reject` with reasons, or `take_over` — a stronger model implements the next attempt fresh from the issue.
 
 It runs on every attempt, not only on escalation.
+
+The decision must be machine-readable — reviewers already emit JSON, and the master's verdict is parsed the same way. Instruct it to emit **only** this JSON — no prose, no fences:
+
+```json
+{
+  "decision": "approve",
+  "reasons": ["No blocking findings; the diff resolves the issue."]
+}
+```
+
+- `decision`: `approve` | `reject` | `take_over`
+- Parsing is fail-closed: unparseable output counts as `reject`. Never grep prose for a verdict.
 
 ## implement_master
 

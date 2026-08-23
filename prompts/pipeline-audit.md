@@ -14,5 +14,7 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 7. Abort writes the blocker to `MEMORY.md` before exiting.
 8. Without `--unattended`, no privileged step proceeds unconfirmed; the confirmation happens before the loop starts.
 9. `implement_master` differs from `implement`, and reviewers span at least two providers.
+10. A resumed run restores per-issue attempt counters from the state file instead of restarting at zero.
+11. `--dry-run` performs no state writes and consumes no budget.
 
 End with a verdict: CONFORMANT or the shortest list of changes that would make it conformant.

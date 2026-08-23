@@ -26,7 +26,7 @@ models:
   implement:         { provider: X, model: strong }
   implement_master:  { provider: Y, model: frontier }
   controller:        { provider: X, model: small }
-  master_review:     { provider: Y, model: frontier }
+  master_review:     { provider: Z, model: frontier }
   review:
     security:        { provider: Y, model: mid }
     quality:         { provider: Z, model: mid }
@@ -41,9 +41,9 @@ models:
 | `implement` | Writes the code | The main cost driver |
 | `implement_master` | Escalated implementation | Must differ from `implement` — a different blind spot is the point |
 | `controller` | Aggregates reviewer JSON, proposes a verdict | Weak model is fine; it does not decide |
-| `master_review` | Final decision | Runs on every attempt |
+| `master_review` | Final decision | Runs on every attempt; should differ from `implement_master` — the escalated model must not review its own work |
 | `review.*` | Independent reviewers | Span ≥2 providers |
-| `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true` |
+| `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced at run time. A collision where both sides resolve to `default` cannot be detected — map at least the implement roles |
 
 `provider` and `model` are opaque strings passed through to the model flag. This skill does not validate them against a catalogue; an unknown model surfaces as a launch failure with the offending role named.
 
@@ -57,7 +57,7 @@ budgets:
   max_split_depth: 1
 ```
 
-`max_attempts_*` are per issue and reset on split. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth: 1` caps the branching — without it, budget alone loses to exponential growth.
+`max_attempts_*` are per issue and reset on split. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth: 1` caps the branching — without it, budget alone loses to exponential growth. The bundled reference script blocks instead of splitting; the field still constrains generators that implement splitting.
 
 Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly six model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
 
@@ -95,3 +95,5 @@ A pipeline generated from governance with none of these blocks must be functiona
 - `max_split_depth` above 1 without an explicit override in the PRD
 
 Each failure names the offending field and the governance file it came from.
+
+Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), and a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers).

@@ -2,6 +2,8 @@
 
 Structural blueprint for the generated `auto-develop.sh`. Stack-agnostic: the gates are read from governance, never hardcoded.
 
+> **Scope of the bundled reference** (`assets/auto-develop.sh`): it implements this blueprint except the split branch (it blocks instead) and the commit/PR/governance-update step (a marked stub). Both are deliberate adaptation points. A generator that implements splitting must honor `max_split_depth`.
+
 ## Contents
 
 - [Layout](#layout)
@@ -96,3 +98,5 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 6. The master review runs on every attempt.
 7. Abort writes to `MEMORY.md` before exiting.
 8. Without `--unattended`, no privileged step proceeds unconfirmed.
+9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.
+10. `--dry-run` writes no state and consumes no budget.

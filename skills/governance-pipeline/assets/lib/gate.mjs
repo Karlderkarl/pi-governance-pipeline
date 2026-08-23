@@ -4,6 +4,7 @@
 // percentage collapses into unanimity and hides that it did.
 //
 //   node gate.mjs --blocking critical,high [--followup medium,low] r1.json r2.json r3.json
+//   node gate.mjs --check r1.json   -> exit 0 = parseable reviewer JSON, 1 = not
 //
 // stdout: merged JSON. Exit 0 = clear, 4 = blocked, 1 = usage error.
 
@@ -12,15 +13,19 @@ import { readFileSync } from "node:fs";
 const argv = process.argv.slice(2);
 let blocking = ["critical", "high"];
 let followup = ["medium", "low"];
+let checkOnly = false;
 const files = [];
 
 for (let i = 0; i < argv.length; i++) {
 	if (argv[i] === "--blocking") blocking = argv[++i].split(",").map((s) => s.trim());
 	else if (argv[i] === "--followup") followup = argv[++i].split(",").map((s) => s.trim());
+	else if (argv[i] === "--check") checkOnly = true;
 	else files.push(argv[i]);
 }
-if (files.length === 0) {
-	process.stderr.write("usage: gate.mjs [--blocking a,b] [--followup c,d] <reviewer.json>...\n");
+if (files.length === 0 || (checkOnly && files.length !== 1)) {
+	process.stderr.write(
+		"usage: gate.mjs [--blocking a,b] [--followup c,d] <reviewer.json>...\n       gate.mjs --check <reviewer.json>\n",
+	);
 	process.exit(1);
 }
 
@@ -37,6 +42,19 @@ function extractJson(text) {
 	} catch {
 		return null;
 	}
+}
+
+// --check mode: is this one file a parseable reviewer object? The pipeline
+// uses it to decide whether a reviewer gets its single retry.
+if (checkOnly) {
+	let ok = false;
+	try {
+		const parsed = extractJson(readFileSync(files[0], "utf8"));
+		ok = !!parsed && Array.isArray(parsed.findings);
+	} catch {
+		ok = false;
+	}
+	process.exit(ok ? 0 : 1);
 }
 
 const unavailable = [];
@@ -67,7 +85,9 @@ const blockingFindings = findings.filter((f) => blocking.includes(String(f.sever
 const followupFindings = findings.filter((f) => followup.includes(String(f.severity).toLowerCase()));
 
 const result = {
-	verdict: blockingFindings.length > 0 ? "blocked" : "clear",
+	// Every reviewer unreadable is reported as blocked, matching the exit code —
+	// a "clear" verdict here would tell the master the gate passed when it did not.
+	verdict: blockingFindings.length > 0 || files.length - unavailable.length === 0 ? "blocked" : "clear",
 	reviewers_used: files.length - unavailable.length,
 	reviewers_unavailable: unavailable,
 	blocking: blockingFindings,

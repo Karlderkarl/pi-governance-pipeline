@@ -30,11 +30,11 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.2
+pi install npm:pi-governance-pipeline@1.0.4
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.2
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.4
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.2
+pi -e npm:pi-governance-pipeline@1.0.4
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
@@ -86,7 +86,7 @@ skills/governance-pipeline/
   assets/lib/gate.mjs          severity gate over reviewer JSON
 extensions/pipeline-guard.ts   privileged-command gate, pipeline_state tool
 prompts/                       /govern, /automate, /pipeline-audit
-docs/PRD-harness.md            the PRD this package was generated from
+docs/PRD-harness.md            (repository only, not packed) — the PRD this package was generated from
 ```
 
 ## The contract
@@ -101,7 +101,7 @@ models:
   implement:         { provider: anthropic, model: sonnet-4.5 }
   implement_master:  { provider: google,    model: gemini-3-pro }
   controller:        { provider: openai,    model: gpt-5-nano }
-  master_review:     { provider: google,    model: gemini-3-pro }
+  master_review:     { provider: anthropic, model: opus-4.5 }
   review:
     security:        { provider: google,    model: gemini-3-flash }
     quality:         { provider: openai,    model: gpt-5 }
@@ -133,6 +133,9 @@ that in two places, not one:
 - `pipeline-guard` blocks privileged bash commands and governance rewrites in a
   session. Without a UI it blocks rather than asks — a privileged step must not
   proceed just because nobody could answer.
+- Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
+  the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
+  human already approved. The two halves of the safety rule meet at this variable.
 
 | Variable | Effect |
 |---|---|

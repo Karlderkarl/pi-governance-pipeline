@@ -31,6 +31,11 @@ jobs:
       # is not guaranteed to be new enough.
       - run: npm install -g npm@latest
 
+      # The value of this package is the correctness of its assets — never
+      # publish a tarball whose script or libraries fail the smoke test.
+      - name: Smoke test pipeline assets
+        run: bash tests/smoke.sh
+
       - name: Tag must match package.json version
         run: |
           tag="${GITHUB_REF_NAME#v}"
