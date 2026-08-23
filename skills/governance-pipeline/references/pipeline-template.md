@@ -53,9 +53,10 @@ load governance ─▶ validate contract ─▶ pick next issue
   ├─ research (once per issue, cached)
   │
   └─ attempt:
-       implement ─▶ lint ─▶ clean-code gate
-         │  (deterministic tools, no model — a failure here retries
-         │   without consuming a review cycle)
+       implement ─▶ deterministic gates (lint, tests)
+         │  (no model — a failure here retries without consuming
+         │   a review cycle; fold clean-code checks into the lint
+         │   command, there is no separate slot)
          ▼
        3 reviewers in parallel, separate processes
          ▼

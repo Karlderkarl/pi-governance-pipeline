@@ -28,6 +28,16 @@ TEST_CMD="${TEST_CMD:-}"                          # adapt: npm test, pytest, ...
 # build directory flushes into every reviewer prompt on every attempt.
 DIFF_MAX_BYTES="${DIFF_MAX_BYTES:-65536}"
 [[ "$DIFF_MAX_BYTES" =~ ^[0-9]+$ ]] || DIFF_MAX_BYTES=65536
+# exclusions.md grows by one block per failed gate and per rejected attempt;
+# cap what re-enters the implement prompt, or a chatty linter inflates it
+# exponentially over the attempt tree.
+EXCLUSIONS_MAX_LINES="${EXCLUSIONS_MAX_LINES:-200}"
+[[ "$EXCLUSIONS_MAX_LINES" =~ ^[0-9]+$ ]] || EXCLUSIONS_MAX_LINES=200
+# The contract promises independent reviewers; no_self_review drops and
+# unparseable output can shrink the panel at run time. Below this floor no
+# independent check is left, and the gate must block instead of approving.
+MIN_REVIEWERS="${MIN_REVIEWERS:-2}"
+[[ "$MIN_REVIEWERS" =~ ^[0-9]+$ ]] || MIN_REVIEWERS=2
 
 UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""
 FAILED_ISSUES=()
@@ -157,7 +167,10 @@ $(excerpt "$2" 200)
 Project coding standards:
 $(excerpt "$SOUL_FILE" 120)
 
-$( [[ -s "$3" ]] && printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n%s\n' "$(cat "$3")" )
+# tail, not head: the retry must fix the newest failure, not re-read the first.
+$( [[ -s "$3" ]] && printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n%s%s\n' \
+     "$( (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )) && printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES" )" \
+     "$(tail -n "$EXCLUSIONS_MAX_LINES" "$3")" )
 
 You have $4 attempts left. Change the code only; do not edit governance files.
 Leave your changes uncommitted in the working tree — the reviewers read the
@@ -345,7 +358,8 @@ $(cat "$work/exclusions.md")"
 
     # One retry per reviewer whose output is not parseable JSON, as specified
     # in prompt-builders.md. Still unparseable afterwards: gate.mjs treats the
-    # reviewer as unavailable and gates on the rest. Only this attempt's
+    # reviewer as unavailable and gates on the rest — down to MIN_REVIEWERS,
+    # below which it blocks instead of approving. Only this attempt's
     # reviewers (ran) are eligible — the retry must never resurrect a dropped
     # reviewer to review its own implementation.
     local i rfile
@@ -367,8 +381,10 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
     local gate_status=0 reviewers_json
     if (( ran_n > 0 )); then
       node "$LIB/gate.mjs" --blocking "$BLOCKING" --followup "$FOLLOWUP" \
-        "${ran[@]}" > "$work/gate.json" || gate_status=$?
-      reviewers_json="$(cat "${ran[@]}")"
+        --min-reviewers "$MIN_REVIEWERS" "${ran[@]}" > "$work/gate.json" || gate_status=$?
+      # gate.mjs marks a missing reviewer file unavailable and carries on; the
+      # prompt assembly must not abort the whole run on that same event.
+      reviewers_json="$(cat "${ran[@]}" 2>/dev/null || true)"
     else
       # Every reviewer was dropped this attempt (e.g. all equal
       # implement_master). Gating on nothing is not a gate: fail closed.

@@ -9,7 +9,7 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 2. Reviewers run as separate `pi -p` processes and receive no sibling verdicts.
 3. Counters and budget are read from and written to `.pipeline/state/<root_id>.json` only, never held in a model context.
 4. The budget check precedes every implementation attempt.
-5. Deterministic gates (lint, tests, clean-code) run before any model-based review.
+5. Deterministic gates (lint, tests — a clean-code check folds into the lint command, there is no separate slot) run before any model-based review.
 6. The master review runs on every attempt, and sees the original reviewer JSON.
 7. Abort writes the blocker to `MEMORY.md` before exiting.
 8. Without `--unattended`, no privileged step proceeds unconfirmed; the confirmation happens before the loop starts.

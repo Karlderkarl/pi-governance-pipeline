@@ -227,6 +227,17 @@ export function validate(config) {
 				);
 			}
 		}
+		// Panel floor: one surviving reviewer is no independent check, and the
+		// runtime gate blocks below two. Warn at generation time, not mid-run.
+		for (const [label, implModel] of [["implement", impl], ["implement_master", master]]) {
+			if (!implModel) continue;
+			const collisions = REVIEWERS.filter((r) => modelRef(m.review?.[r]) === implModel).length;
+			if (collisions > REVIEWERS.length - 2) {
+				warnings.push(
+					`AGENTS.md: ${collisions} of ${REVIEWERS.length} reviewers equal models.${label} (${implModel}); no_self_review leaves fewer than two reviewers on that path, where the runtime gate blocks instead of approving`,
+				);
+			}
+		}
 	}
 	return { errors, warnings };
 }

@@ -22,7 +22,9 @@ ticket without a ceiling. This package separates the three concerns:
   script is never touched.
 - **Review** — three reviewers in three processes, spanning at least two providers,
   none of them seeing another's verdict. A model that implemented a diff never
-  reviews it. Gating is by severity, not by vote count.
+  reviews it. Gating is by severity, not by vote count — and if self-review drops
+  and lost outputs shrink the panel below two reviewers, the gate blocks instead
+  of approving.
 - **Budget** — counters and budget live in `.pipeline/state/<root_id>.json`, never in
   a model context. Attempts are a quality signal per issue; the tree budget is a
   resource limit that never resets.

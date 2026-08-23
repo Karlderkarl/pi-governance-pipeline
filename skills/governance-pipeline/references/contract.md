@@ -96,4 +96,4 @@ A pipeline generated from governance with none of these blocks must be functiona
 
 Each failure names the offending field and the governance file it came from.
 
-Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), and a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers).
+Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model — `no_self_review` would leave fewer than two reviewers on that path, and the runtime gate blocks below that floor instead of approving.

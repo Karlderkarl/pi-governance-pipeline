@@ -77,10 +77,12 @@ Read these first:
 The generated pipeline runs this loop per issue:
 
 ```
-research ─▶ implement/TDD ─▶ lint + clean-code gate ─▶ 3 parallel reviews
+research ─▶ implement/TDD ─▶ deterministic gates (lint, tests) ─▶ 3 parallel reviews
    ─▶ controller (aggregates, proposes) ─▶ master review (decides, always runs)
         ├─ approved  ─▶ governance update ─▶ next issue
-        ├─ rejected  ─▶ back to implement  (max 3, then split into sub-issues)
+        ├─ rejected  ─▶ back to implement  (max 3, then blocked — splitting is a
+        │                                     generator's adaptation point; the
+        │                                     bundled reference blocks instead)
         └─ 3x failed at master ─▶ abort: mark blocked, write blocker to MEMORY.md, notify human
 ```
 
@@ -110,7 +112,7 @@ The mapping lives in `AGENTS.md` under `models:`; the field reference is in `ref
 
 Two constraints the generated script must enforce:
 
-- **No self-review.** A model that implemented a diff must not review it. On collision, drop that reviewer for the run and gate on the rest.
+- **No self-review.** A model that implemented a diff must not review it. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel (`MIN_REVIEWERS`, default 2).
 - **Provider diversity.** Reviewers should span at least two providers. Three prompts against one model share its blind spots, which defeats the purpose of reviewing three times.
 
 Invoke a role like this, reading `MODEL` from the mapping:

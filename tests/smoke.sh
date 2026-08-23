@@ -253,4 +253,86 @@ grep -q "diff truncated at 1024 bytes" "$proj5/.pipeline/work/issue-5/diff.patch
 [[ "$(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch")" -lt 2048 ]] \
   || fail "truncated diff still too large"
 
+# ---------------------------------------------------------------- gate floor
+# One surviving reviewer is not a panel: below --min-reviewers the gate blocks
+# instead of approving. Default stays 1, so existing callers are unaffected.
+rc=0; node "$LIB/gate.mjs" --min-reviewers 2 "$TMP/r-ok.json" > "$TMP/gate-floor.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "gate approved a one-reviewer panel despite --min-reviewers 2"
+grep -q '"verdict": "blocked"' "$TMP/gate-floor.json" || fail "shrunk panel must report blocked"
+node "$LIB/gate.mjs" --min-reviewers 2 "$TMP/r-ok.json" "$TMP/r-ok.json" >/dev/null \
+  || fail "gate blocked a panel at the floor"
+
+# validator: two reviewers equal to implement_master leave a one-reviewer panel
+# on the escalated path — warn at generation time, not mid-run
+cat > "$TMP/warn-floor.md" <<'MD'
+# A
+```yaml
+models:
+  implement:        { provider: a, model: m1 }
+  implement_master: { provider: b, model: m2 }
+  review:
+    security:    { provider: b, model: m2 }
+    quality:     { provider: b, model: m2 }
+    correctness: { provider: c, model: m3 }
+```
+MD
+node "$LIB/governance.mjs" config "$TMP/warn-floor.md" 2>&1 >/dev/null \
+  | grep -q "fewer than two reviewers" \
+  || fail "panel below the floor produced no generation-time warning"
+
+# ---------------------------------------------------------------- e2e: reviewer floor
+# Two of three reviewers return garbage, persistently (retry included). One
+# readable reviewer remains — below the script's default floor of two. The
+# master approving must not matter: the gate blocks, the issue is blocked.
+proj6="$TMP/run-floor"; mkdir -p "$proj6/.pipeline/lib"
+cp "$SH" "$proj6/auto-develop.sh"; cp "$LIB"/*.mjs "$proj6/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj6/AGENTS.md"
+printf -- "- [ ] issue-6: shrunk panel\n" > "$proj6/tasks.md"
+stub2="$TMP/stub2-bin"; mkdir -p "$stub2"
+cat > "$stub2/pi" <<'EOF'
+#!/usr/bin/env bash
+for last; do :; done   # the prompt is the final argument
+case "$last" in
+  *"Gather context"*)       echo "research notes" ;;
+  *"Implement this issue"*) : ;;
+  *"concern only: quality"*)
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  *"concern only:"*)        echo 'not json at all' ;;
+  *"Merge these reviewer"*) echo '{}' ;;
+  *"Decide this attempt"*)  echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub2/pi"
+rc=0
+out="$(cd "$proj6" && PATH="$stub2:$PATH" PI_CALLS_LOG="$TMP/calls6.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "a one-reviewer panel approved its issue"
+if echo "$out" | grep -q "^approved: issue-6"; then fail "shrunk panel approved issue-6"; fi
+grep -q '"reviewers_used": 1' "$proj6/.pipeline/work/issue-6/gate.json" \
+  || fail "gate must count only parseable reviewers: $(cat "$proj6/.pipeline/work/issue-6/gate.json")"
+grep -q '"verdict": "blocked"' "$proj6/.pipeline/work/issue-6/gate.json" \
+  || fail "shrunk panel must be blocked at the gate"
+
+# ---------------------------------------------------------------- e2e: exclusions cap
+# A chatty linter (300 lines per failure) must not inflate the implement prompt
+# unboundedly: newest blocks survive, oldest are omitted, the prompt is capped.
+proj7="$TMP/run-exclcap"; mkdir -p "$proj7/.pipeline/lib"
+cp "$SH" "$proj7/auto-develop.sh"; cp "$LIB"/*.mjs "$proj7/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj7/AGENTS.md"
+printf -- "- [ ] issue-7: exclusions cap\n" > "$proj7/tasks.md"
+rc=0
+out="$(cd "$proj7" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls7.log" \
+  LINT_CMD='i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo "lint-line-$i"; done; false' \
+  bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "persistent lint failure should block, not pass"
+last_prompt="$(ls -t "$proj7"/.pipeline/prompts/issue-7/issue-7-implement*.txt | head -1)"
+grep -q "older blocks omitted" "$last_prompt" \
+  || fail "exclusion cap marker missing in the implement prompt"
+[[ "$(wc -l < "$last_prompt")" -lt 320 ]] \
+  || fail "implement prompt not bounded: $(wc -l < "$last_prompt") lines"
+# The newest prompt was rendered before the newest lint run, so the latest
+# block it can contain is attempt 5.
+grep -q "(attempt 5)" "$last_prompt" || fail "newest lint block must survive the cap"
+if grep -q "(attempt 1)" "$last_prompt"; then fail "oldest lint block should have been capped away"; fi
+
 echo "smoke OK"

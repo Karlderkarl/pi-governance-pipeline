@@ -3,28 +3,34 @@
 // findings, and decides. No vote count, no percentage: over three reviewers a
 // percentage collapses into unanimity and hides that it did.
 //
-//   node gate.mjs --blocking critical,high [--followup medium,low] r1.json r2.json r3.json
+//   node gate.mjs --blocking critical,high [--followup medium,low] [--min-reviewers N] r1.json r2.json r3.json
 //   node gate.mjs --check r1.json   -> exit 0 = parseable reviewer JSON, 1 = not
 //
 // stdout: merged JSON. Exit 0 = clear, 4 = blocked, 1 = usage error.
+// --min-reviewers (default 1): a panel shrunk below the floor — reviewers
+// dropped by no_self_review or lost to unparseable output — blocks instead of
+// approving. One opinion is not a review panel.
 
 import { readFileSync } from "node:fs";
 
 const argv = process.argv.slice(2);
 let blocking = ["critical", "high"];
 let followup = ["medium", "low"];
+let minReviewers = 1;
 let checkOnly = false;
 const files = [];
 
 for (let i = 0; i < argv.length; i++) {
 	if (argv[i] === "--blocking") blocking = argv[++i].split(",").map((s) => s.trim());
 	else if (argv[i] === "--followup") followup = argv[++i].split(",").map((s) => s.trim());
+	else if (argv[i] === "--min-reviewers") minReviewers = Number(argv[++i]);
 	else if (argv[i] === "--check") checkOnly = true;
 	else files.push(argv[i]);
 }
+if (!Number.isInteger(minReviewers) || minReviewers < 1) minReviewers = 1;
 if (files.length === 0 || (checkOnly && files.length !== 1)) {
 	process.stderr.write(
-		"usage: gate.mjs [--blocking a,b] [--followup c,d] <reviewer.json>...\n       gate.mjs --check <reviewer.json>\n",
+		"usage: gate.mjs [--blocking a,b] [--followup c,d] [--min-reviewers n] <reviewer.json>...\n       gate.mjs --check <reviewer.json>\n",
 	);
 	process.exit(1);
 }
@@ -85,16 +91,18 @@ const blockingFindings = findings.filter((f) => blocking.includes(String(f.sever
 const followupFindings = findings.filter((f) => followup.includes(String(f.severity).toLowerCase()));
 
 const result = {
-	// Every reviewer unreadable is reported as blocked, matching the exit code —
-	// a "clear" verdict here would tell the master the gate passed when it did not.
-	verdict: blockingFindings.length > 0 || files.length - unavailable.length === 0 ? "blocked" : "clear",
+	// Every reviewer unreadable — or a panel below the floor — is reported as
+	// blocked, matching the exit code: a "clear" verdict here would tell the
+	// master the gate passed when it did not.
+	verdict: blockingFindings.length > 0 || files.length - unavailable.length < minReviewers ? "blocked" : "clear",
 	reviewers_used: files.length - unavailable.length,
 	reviewers_unavailable: unavailable,
+	min_reviewers: minReviewers,
 	blocking: blockingFindings,
 	followups: followupFindings,
 };
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-// Every reviewer unreadable is not an approval. Gating on nothing is not a gate.
-if (result.reviewers_used === 0) process.exit(4);
+// A panel below the floor is not an approval. Gating on too little is not a gate.
+if (result.reviewers_used < minReviewers) process.exit(4);
 process.exit(result.verdict === "blocked" ? 4 : 0);
