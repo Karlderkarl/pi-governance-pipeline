@@ -328,11 +328,19 @@ out="$(cd "$proj7" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls7.log" \
 last_prompt="$(ls -t "$proj7"/.pipeline/prompts/issue-7/issue-7-implement*.txt | head -1)"
 grep -q "older blocks omitted" "$last_prompt" \
   || fail "exclusion cap marker missing in the implement prompt"
+if grep -q "kept]lint-line" "$last_prompt"; then fail "cap marker glued to the first kept line"; fi
+if grep -q "tail, not head" "$last_prompt"; then fail "script comment leaked into the prompt"; fi
 [[ "$(wc -l < "$last_prompt")" -lt 320 ]] \
   || fail "implement prompt not bounded: $(wc -l < "$last_prompt") lines"
 # The newest prompt was rendered before the newest lint run, so the latest
 # block it can contain is attempt 5.
 grep -q "(attempt 5)" "$last_prompt" || fail "newest lint block must survive the cap"
 if grep -q "(attempt 1)" "$last_prompt"; then fail "oldest lint block should have been capped away"; fi
+# One archived prompt per attempt, not one per role: 3 controller + 3 master
+# attempts must each keep the prompt that produced them.
+[[ "$(ls "$proj7"/.pipeline/prompts/issue-7/ | grep -c '^issue-7-implement-a')" -eq 3 ]] \
+  || fail "controller attempts must each keep their prompt"
+[[ "$(ls "$proj7"/.pipeline/prompts/issue-7/ | grep -c '^issue-7-implement_master-a')" -eq 3 ]] \
+  || fail "master attempts must each keep their prompt"
 
 echo "smoke OK"

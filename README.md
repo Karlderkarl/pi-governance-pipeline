@@ -148,6 +148,15 @@ that in two places, not one:
 | `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` | Allows the govern step to write governance non-interactively |
 | `PIPELINE_ALLOW_DEEP_SPLIT=1` | Accepts `max_split_depth > 1` |
 
+The generated script reads its own tuning variables; the defaults are safe and
+rarely need changing:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; larger diffs are truncated and say so |
+| `EXCLUSIONS_MAX_LINES` | `200` | Cap on prior findings re-entering the implement prompt; the newest blocks survive, the oldest are omitted |
+| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving |
+
 ## Releasing (maintainers)
 
 Publish happens only from a pushed tag — never from a local machine. The release

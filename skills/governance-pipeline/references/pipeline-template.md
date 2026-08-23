@@ -20,7 +20,7 @@ auto-develop.sh              # entry point, the loop
 .pipeline/
   state/<root_id>.json       # counters and budget
   logs/<root_id>/<run>.jsonl # per-run event log
-  prompts/                   # rendered prompts, for debugging
+  prompts/                   # rendered prompts, one per role and attempt, for debugging
 tasks.md                     # or the issue source declared in governance
 ```
 

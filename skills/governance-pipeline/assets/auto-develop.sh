@@ -103,11 +103,13 @@ log_event() { # log_event <root> <issue> <role> <model> <status> <prompt_path>
 # ------------------------------------------------------------------- runners
 # One role, one process, one fresh context. Reviewers stay independent because
 # they are separate processes, not because we asked them to be.
-run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile>
-  local root="$1" issue="$2" role="$3" prompt="$4" out="$5"
+run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-tag]
+  local root="$1" issue="$2" role="$3" prompt="$4" out="$5" att="${6:-}"
   local model; model="$(model_for "$role")"
   local pdir="$PIPELINE_DIR/prompts/$root"; mkdir -p "$pdir" "$(dirname "$out")"
-  local ppath="$pdir/${issue}-${role//./_}-$RUN_ID.txt"
+  # One file per attempt, not one per role: the earlier prompts are exactly
+  # what you want when debugging a retry loop.
+  local ppath="$pdir/${issue}-${role//./_}${att:+-$att}-$RUN_ID.txt"
   printf '%s\n' "$prompt" > "$ppath"
 
   if (( DRY_RUN )); then
@@ -155,6 +157,8 @@ EOF
 }
 
 build_implement_prompt() { # <issue> <researchfile> <exclusionfile> <attempts_left>
+  # tail, not head: the retry must fix the newest failure, not re-read the
+  # first. Above the cap, the oldest blocks are omitted and the prompt says so.
   cat <<EOF
 Implement this issue test-first: write the failing test, watch it fail, make it pass.
 
@@ -167,11 +171,13 @@ $(excerpt "$2" 200)
 Project coding standards:
 $(excerpt "$SOUL_FILE" 120)
 
-# tail, not head: the retry must fix the newest failure, not re-read the first.
-$( [[ -s "$3" ]] && printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n%s%s\n' \
-     "$( (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )) && printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES" )" \
-     "$(tail -n "$EXCLUSIONS_MAX_LINES" "$3")" )
-
+$( if [[ -s "$3" ]]; then
+     printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n'
+     if (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )); then
+       printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES"
+     fi
+     tail -n "$EXCLUSIONS_MAX_LINES" "$3"
+   fi )
 You have $4 attempts left. Change the code only; do not edit governance files.
 Leave your changes uncommitted in the working tree — the reviewers read the
 working-tree diff, and committed work would be invisible to them.
@@ -283,6 +289,7 @@ $(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
       esac
     fi
 
+    local attempt_n=$(( ctrl_attempts + master_attempts + 1 ))
     local role="implement" left=$(( MAX_CTRL - ctrl_attempts ))
     if (( ctrl_attempts >= MAX_CTRL )); then
       role="implement_master"; left=$(( MAX_MASTER - master_attempts ))
@@ -296,7 +303,7 @@ $(cat "$work/exclusions.md")"
 
     run_role "$root" "$issue_id" "$role" \
       "$(build_implement_prompt "$issue_line" "$work/research.md" "$work/exclusions.md" "$left")" \
-      "$work/implement.log" || true
+      "$work/implement.log" "a$attempt_n" || true
 
     if [[ "$role" == "implement" ]]; then ctrl_attempts=$((ctrl_attempts+1)); else master_attempts=$((master_attempts+1)); fi
     if (( ! DRY_RUN )); then
@@ -346,7 +353,7 @@ $(cat "$work/exclusions.md")"
       fi
       run_role "$root" "$issue_id" "review.$focus" \
         "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")" \
-        "$work/review-$focus.json" &
+        "$work/review-$focus.json" "a$attempt_n" &
       pids+=($!)
       ran+=("$work/review-$focus.json")
       ran_focus+=("$focus")
@@ -372,7 +379,7 @@ $(cat "$work/exclusions.md")"
           "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")
 
 REMINDER: your previous output was not parseable. Emit ONLY the JSON object — no prose, no code fence." \
-          "$rfile" || true
+          "$rfile" "a$attempt_n-retry" || true
       fi
     done
 
@@ -388,7 +395,7 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
     else
       # Every reviewer was dropped this attempt (e.g. all equal
       # implement_master). Gating on nothing is not a gate: fail closed.
-      printf '%s\n' '{"verdict":"blocked","reviewers_used":0,"reviewers_unavailable":["all dropped by no_self_review"],"blocking":[],"followups":[]}' \
+      printf '%s\n' '{"verdict":"blocked","reviewers_used":0,"reviewers_unavailable":["all dropped by no_self_review"],"min_reviewers":'"$MIN_REVIEWERS"',"blocking":[],"followups":[]}' \
         > "$work/gate.json"
       gate_status=4
       reviewers_json="(no reviewer output: every reviewer was dropped by no_self_review in this attempt)"
@@ -399,7 +406,7 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
     run_role "$root" "$issue_id" controller \
       "Merge these reviewer JSON objects. Deduplicate findings naming the same file and line, apply the severity rule (blocking: $BLOCKING), and propose a verdict. You do not decide; the master sees the originals regardless. Emit only JSON.
 
-$reviewers_json" "$work/controller.json" || true
+$reviewers_json" "$work/controller.json" "a$attempt_n" || true
 
     run_role "$root" "$issue_id" master_review \
       "Decide this attempt. Check the controller's arithmetic against the original reviewer JSON rather than trusting it.
@@ -425,7 +432,7 @@ Outcomes:
 - take_over: the approach itself is wrong; a stronger model implements the next attempt fresh from the issue
 
 Emit ONLY this JSON, no prose and no code fence:
-{\"decision\":\"approve|reject|take_over\",\"reasons\":[\"...\"]}" "$work/master.txt" || true
+{\"decision\":\"approve|reject|take_over\",\"reasons\":[\"...\"]}" "$work/master.txt" "a$attempt_n" || true
 
     # The verdict is machine-readable and fail-closed: anything that is not a
     # parseable decision counts as reject. Never grep prose for a verdict.

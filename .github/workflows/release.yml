@@ -53,9 +53,15 @@ jobs:
         run: npm publish
 
       # The GitHub Release comes last: it only exists when the tarball it
-      # points at is already on npm. Notes are generated from the commits
-      # since the previous tag.
+      # points at is already on npm. Curated notes (### Fixed / Added /
+      # Changed plus a compare link) can be pre-seeded in release-notes.md;
+      # otherwise the release falls back to generated notes.
       - name: GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          if [ -f release-notes.md ]; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
