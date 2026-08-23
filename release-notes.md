@@ -1,13 +1,12 @@
-Guards the release workflow against stale curated notes, pulls the README examples up to the version they describe, and finishes the prompt-hygiene pass around the exclusion block.
+Anchors the release-notes freshness guard to the tag's own side of the compare link, and finishes the blank-line discipline around the exclusion block in both directions.
 
 ### Fixed
-- `release-notes.md` had no freshness guard: tagging without touching the file would have silently published the previous release's notes, including a compare link for the wrong range. The workflow now only uses the file when it names the tag being released, and otherwise falls back to generated notes — generic, but never wrong.
-- The README install examples pinned `@1.0.5` while the registry already served 1.0.6; they now track the release, and the example tag command uses a `vX.Y.Z` placeholder instead of an already-taken tag.
-- The blank line between the exclusion block and the closing instruction was lost in the glue fix: after a long lint block the prompt's only imperative line stuck to the last finding. Separated again; smoke pins it.
-- `You have 1 attempts left` — singular now spells correctly.
+- The freshness guard matched the tag anywhere in `release-notes.md` — including the *left* side of the compare link, so re-tagging vN while notes for vN+1 were already seeded would have published notes describing the wrong range. The guard now anchors: the tag must appear on the right side of the compare link (`…v1.0.7...v1.0.8`) or as a markdown heading, verified against a five-case matrix including `v1.0.80` collisions.
+- The README described the guard's condition but not its requirement; it now states plainly that the file must name the tag being released, otherwise the fallback generates notes instead.
+- Blank lines around the exclusion block are now correct in both directions: exactly one before the closing instruction when prior findings exist, and exactly one when they don't (previously three in the first attempt). The block is built before the heredoc and inserted via `${excl:+…}`, because trailing newlines inside heredoc command substitutions are stripped.
 
 ### Changed
-- Attempt tags in the prompt archive are zero-padded (`a01`…`a20`), so plain `ls` sorts them chronologically past attempt 9.
-- The release checklist explicitly calls for seeding `release-notes.md` alongside the version bump.
+- README install examples track the release (`@1.0.8`).
+- Smoke pins the empty-exclusion case too: the first-attempt prompt must show exactly one blank line before the closing instruction (the test project now carries a SOUL.md so the assertion measures spacing, not a missing excerpt).
 
-**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.6...v1.0.7
+**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.7...v1.0.8

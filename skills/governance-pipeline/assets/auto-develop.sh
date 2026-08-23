@@ -159,6 +159,18 @@ EOF
 build_implement_prompt() { # <issue> <researchfile> <exclusionfile> <attempts_left>
   # tail, not head: the retry must fix the newest failure, not re-read the
   # first. Above the cap, the oldest blocks are omitted and the prompt says so.
+  # The block is built before the heredoc so its surrounding blank lines can
+  # be conditional: ${excl:+...} expands to nothing when there are no prior
+  # findings — a trailing printf inside a heredoc $() would be stripped, and
+  # an unconditional blank line would stack in the empty case.
+  local excl=""
+  if [[ -s "$3" ]]; then
+    excl="$( printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n'
+      if (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )); then
+        printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES"
+      fi
+      tail -n "$EXCLUSIONS_MAX_LINES" "$3" )"
+  fi
   cat <<EOF
 Implement this issue test-first: write the failing test, watch it fail, make it pass.
 
@@ -171,15 +183,9 @@ $(excerpt "$2" 200)
 Project coding standards:
 $(excerpt "$SOUL_FILE" 120)
 
-$( if [[ -s "$3" ]]; then
-     printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n'
-     if (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )); then
-       printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES"
-     fi
-     tail -n "$EXCLUSIONS_MAX_LINES" "$3"
-   fi )
+${excl:+$excl
 
-You have $4 attempt$( (( $4 == 1 )) || printf 's' ) left. Change the code only; do not edit governance files.
+}You have $4 attempt$( (( $4 == 1 )) || printf 's' ) left. Change the code only; do not edit governance files.
 Leave your changes uncommitted in the working tree — the reviewers read the
 working-tree diff, and committed work would be invisible to them.
 EOF

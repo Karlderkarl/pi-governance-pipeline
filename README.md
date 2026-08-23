@@ -32,18 +32,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.7
+pi install npm:pi-governance-pipeline@1.0.8
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.7
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.8
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.7
+pi -e npm:pi-governance-pipeline@1.0.8
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.7
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.8
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -164,8 +164,10 @@ workflow runs `tests/smoke.sh` first and then publishes via npm Trusted Publishi
 (OIDC), which attaches a provenance attestation. Once the tarball is on the
 registry, the same workflow creates the GitHub Release for the tag — from
 `release-notes.md` at the repo root when you pre-seed curated notes there
-(`### Fixed` / `### Added` / `### Changed` plus a compare link), otherwise with
-notes generated from the commits since the previous tag. A local `npm publish`
+(`### Fixed` / `### Added` / `### Changed` plus a compare link). The file must
+name the tag being released — on the right side of the compare link or as a
+heading — otherwise the workflow treats it as a leftover from the previous
+release and generates notes from the commits instead. A local `npm publish`
 bypasses both and puts a tarball on the registry that the chain never verified.
 
 ```bash

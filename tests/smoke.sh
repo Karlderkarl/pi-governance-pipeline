@@ -320,6 +320,7 @@ proj7="$TMP/run-exclcap"; mkdir -p "$proj7/.pipeline/lib"
 cp "$SH" "$proj7/auto-develop.sh"; cp "$LIB"/*.mjs "$proj7/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj7/AGENTS.md"
 printf -- "- [ ] issue-7: exclusions cap\n" > "$proj7/tasks.md"
+printf 'write clean code\n' > "$proj7/SOUL.md"
 rc=0
 out="$(cd "$proj7" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls7.log" \
   LINT_CMD='i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo "lint-line-$i"; done; false' \
@@ -336,6 +337,14 @@ if grep -q "tail, not head" "$last_prompt"; then fail "script comment leaked int
   || fail "missing blank line before the closing instruction"
 grep -q 'You have 1 attempt left' "$last_prompt" \
   || fail "singular attempt count broken"
+# The empty exclusion case (first attempt) must have exactly one blank line
+# before the closing instruction — the separation is printed inside the same
+# substitution, so an empty block must not stack newlines.
+first_prompt="$(ls "$proj7"/.pipeline/prompts/issue-7/issue-7-implement-a01-* | head -1)"
+[[ -z "$(grep -B1 'You have' "$first_prompt" | head -1)" ]] \
+  || fail "first prompt: closing instruction glued to the standards excerpt"
+[[ -n "$(grep -B2 'You have' "$first_prompt" | head -1)" ]] \
+  || fail "first prompt: stacked blank lines before the closing instruction"
 [[ "$(wc -l < "$last_prompt")" -lt 320 ]] \
   || fail "implement prompt not bounded: $(wc -l < "$last_prompt") lines"
 # The newest prompt was rendered before the newest lint run, so the latest

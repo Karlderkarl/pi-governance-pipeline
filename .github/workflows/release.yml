@@ -62,7 +62,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f release-notes.md ] && grep -qwF "$GITHUB_REF_NAME" release-notes.md; then
+          # Freshness guard, anchored: the tag must appear on the right side
+          # of the compare link (…v1.0.7...v1.0.8) or as a markdown heading.
+          # The left side of the link does not count — re-tagging an old
+          # release with newer notes present must fall back, not publish
+          # notes that describe a different range.
+          esc="${GITHUB_REF_NAME//./\\.}"
+          if [ -f release-notes.md ] && grep -Eq '(\.\.\.|^#+ )'"$esc"'([^0-9]|$)' release-notes.md; then
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
           else
             gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
