@@ -1,12 +1,12 @@
-Anchors the release-notes freshness guard to the tag's own side of the compare link, and finishes the blank-line discipline around the exclusion block in both directions.
+Adds an optional per-role `thinking` level to the model contract, so effort can be routed like models are — a cheap level for the mechanical roles, a high one where the reasoning has to hold.
 
-### Fixed
-- The freshness guard matched the tag anywhere in `release-notes.md` — including the *left* side of the compare link, so re-tagging vN while notes for vN+1 were already seeded would have published notes describing the wrong range. The guard now anchors: the tag must appear on the right side of the compare link (`…v1.0.7...v1.0.8`) or as a markdown heading, verified against a five-case matrix including `v1.0.80` collisions.
-- The README described the guard's condition but not its requirement; it now states plainly that the file must name the tag being released, otherwise the fallback generates notes instead.
-- Blank lines around the exclusion block are now correct in both directions: exactly one before the closing instruction when prior findings exist, and exactly one when they don't (previously three in the first attempt). The block is built before the heredoc and inserted via `${excl:+…}`, because trailing newlines inside heredoc command substitutions are stripped.
+### Added
+- `models.<role>.thinking` accepts pi's levels (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and launches the role as `--model provider/id:thinking`, pi's documented shorthand. Absent, the level stays pi's own decision, so a pre-contract mapping behaves exactly as before.
+- Validation refuses an unknown level at generation time. pi's CLI does not fall back on an invalid `:suffix` — it fails to resolve the model — so the error belongs where the mapping is written, not where it launches.
 
 ### Changed
-- README install examples track the release (`@1.0.8`).
-- Smoke pins the empty-exclusion case too: the first-attempt prompt must show exactly one blank line before the closing instruction (the test project now carries a SOUL.md so the assertion measures spacing, not a missing excerpt).
+- `no_self_review` compares `provider/model` and ignores the level, in the validator and at run time: the same model at two effort levels is still the same model reviewing its own diff. `implement_master` vs `implement` is compared the same way.
+- Contract, skill, and README now state what the level does not promise: pi clamps a level a model does not expose to the nearest one it does, silently, and the run log records the level that was requested. Omitted, pi resolves it from `modelThinkingLevels` for that model first, `defaultThinkingLevel` second, and its own built-in default (`medium`) last — an unmapped role is not an unthinking one.
+- The example mapping puts `master_review` at `high` rather than below the implementers it adjudicates.
 
-**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.7...v1.0.8
+**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.8...v1.0.9

@@ -86,7 +86,16 @@ NO_SELF_REVIEW="$(node -e 'console.log(JSON.parse(process.argv[1]).models.constr
 
 # Models are resolved once, up front: warnings surface exactly once, and a
 # later unreadable AGENTS.md cannot silently flip routing mid-run.
+# Invoke refs may carry pi's :<thinking> suffix (see --model / --thinking).
 model_for() { node -e 'const m=JSON.parse(process.argv[1]);console.log(m[process.argv[2]]??"default")' "$MODELS_JSON" "$1"; }
+# Identity for no_self_review is provider/model. Thinking is a launch
+# parameter, not a different model — sonnet:high and sonnet:low still collide.
+model_identity() {
+  case "$1" in
+    *:off|*:minimal|*:low|*:medium|*:high|*:xhigh|*:max) printf '%s\n' "${1%:*}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
 
 # ------------------------------------------------------------------- logging
 RUN_ID="$(date +%Y%m%dT%H%M%S)"
@@ -352,7 +361,7 @@ $(cat "$work/exclusions.md")"
     local pids=() ran=() ran_focus=() ran_n=0 focus rmodel
     for focus in security quality correctness; do
       rmodel="$(model_for "review.$focus")"
-      if [[ "$NO_SELF_REVIEW" == "true" && "$impl_model" != "default" && "$rmodel" == "$impl_model" ]]; then
+      if [[ "$NO_SELF_REVIEW" == "true" && "$impl_model" != "default" && "$(model_identity "$rmodel")" == "$(model_identity "$impl_model")" ]]; then
         echo "no_self_review: reviewer $focus dropped — $rmodel implemented this diff" >&2
         log_event "$root" "$issue_id" "review.$focus" "$rmodel" "dropped-self-review" "-"
         # A leftover file is a verdict on a different diff by a reviewer that

@@ -121,6 +121,8 @@ Invoke a role like this, reading `MODEL` from the mapping:
 pi -p --model "$MODEL" "$(build_prompt review security "$ISSUE" "$DIFF")"
 ```
 
+`$MODEL` is `provider/id`, or `provider/id:thinking` when the role sets `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). That is pi's `--model` shorthand; the separate `--thinking <level>` flag does the same job and wins when both are given, so pass one or the other, never both. pi clamps a level the model does not expose to the nearest one it does, and says nothing — the level is an instruction, not a guarantee. The same model may be mapped to two roles with different thinking. Identity for `no_self_review` and for `implement` vs `implement_master` still ignores thinking — a different effort level is not a different model.
+
 Verify the exact flag names against `pi --help` for the installed version before generating the script, and use the JSON event stream mode when the caller needs to parse structured output rather than prose.
 
 ## Escalation and abort

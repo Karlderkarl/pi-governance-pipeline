@@ -3,8 +3,8 @@
 // auto-develop pipeline. No dependencies: node built-ins only.
 //
 //   node governance.mjs config  <AGENTS.md>              -> merged config as JSON
-//   node governance.mjs model   <AGENTS.md> <role.path>  -> "provider/model" or "default"
-//   node governance.mjs models  <AGENTS.md>              -> JSON map of every role to its model
+//   node governance.mjs model   <AGENTS.md> <role.path>  -> "provider/model", "provider/model:thinking", or "default"
+//   node governance.mjs models  <AGENTS.md>              -> JSON map of every role to its invoke ref
 //   node governance.mjs state init     <dir> <root_id>
 //   node governance.mjs state show     <dir> <root_id>
 //   node governance.mjs state issue    <dir> <root_id> <issue_id> [status]
@@ -36,6 +36,9 @@ const DEFAULTS = {
 
 const ROLES = ["research", "implement", "implement_master", "controller", "master_review"];
 const REVIEWERS = ["security", "quality", "correctness"];
+// pi --model <pattern> accepts an optional :<thinking> suffix; these are the
+// levels from pi's --thinking flag. Identity comparisons strip this suffix.
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 /* ------------------------------------------------------------- yaml subset */
 
@@ -157,20 +160,49 @@ function withDefaults(parsed) {
 	};
 }
 
+function thinkingRef(entry) {
+	if (!entry || typeof entry !== "object") return null;
+	if (entry.thinking == null || entry.thinking === "") return null;
+	return String(entry.thinking);
+}
+
+// Identity: provider/model. Thinking is a launch parameter, not a new model.
 function modelRef(entry) {
 	if (!entry || typeof entry !== "object") return null;
 	if (!entry.model) return null;
 	return entry.provider ? `${entry.provider}/${entry.model}` : String(entry.model);
 }
 
-export function resolveModel(config, rolePath) {
+// What pi --model accepts: provider/model or provider/model:thinking.
+function invokeRef(entry) {
+	const id = modelRef(entry);
+	if (!id) return null;
+	const thinking = thinkingRef(entry);
+	return thinking ? `${id}:${thinking}` : id;
+}
+
+function roleEntry(config, rolePath) {
 	const parts = rolePath.split(".");
 	let node = config.models;
 	for (const part of parts) {
-		if (!node || typeof node !== "object") return "default";
+		if (!node || typeof node !== "object") return null;
 		node = node[part];
 	}
-	return modelRef(node) ?? "default";
+	return node && typeof node === "object" ? node : null;
+}
+
+export function resolveModel(config, rolePath) {
+	return invokeRef(roleEntry(config, rolePath)) ?? "default";
+}
+
+function eachMappedRole(models, fn) {
+	for (const role of ROLES) {
+		if (models[role] && typeof models[role] === "object") fn(role, models[role]);
+	}
+	for (const r of REVIEWERS) {
+		const entry = models.review?.[r];
+		if (entry && typeof entry === "object") fn(`review.${r}`, entry);
+	}
 }
 
 // Generation-time validation. Runtime is too late: a correlated reviewer set
@@ -201,6 +233,18 @@ export function validate(config) {
 			`AGENTS.md budgets.max_split_depth is ${b.max_split_depth}; depth above 1 grows exponentially. Set PIPELINE_ALLOW_DEEP_SPLIT=1 to override deliberately`,
 		);
 	}
+	eachMappedRole(m, (path, entry) => {
+		const thinking = thinkingRef(entry);
+		if (!thinking) return;
+		if (!THINKING_LEVELS.has(thinking)) {
+			errors.push(
+				`AGENTS.md models.${path}.thinking (${thinking}) is not a pi thinking level (off, minimal, low, medium, high, xhigh, max)`,
+			);
+		}
+		if (!entry.model) {
+			warnings.push(`AGENTS.md models.${path}.thinking is set but model is absent; thinking is ignored`);
+		}
+	});
 	// Warnings: legal configurations that defeat the point of the design.
 	const masterReview = modelRef(m.master_review);
 	if (master && masterReview && master === masterReview) {

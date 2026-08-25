@@ -22,15 +22,15 @@ The versioned interface between the two modes. `govern` writes these fields; `au
 
 ```yaml
 models:
-  research:          { provider: X, model: mid }
-  implement:         { provider: X, model: strong }
-  implement_master:  { provider: Y, model: frontier }
+  research:          { provider: X, model: mid, thinking: low }
+  implement:         { provider: X, model: strong, thinking: high }
+  implement_master:  { provider: Y, model: frontier, thinking: high }
   controller:        { provider: X, model: small }
-  master_review:     { provider: Z, model: frontier }
+  master_review:     { provider: Z, model: frontier, thinking: high }
   review:
-    security:        { provider: Y, model: mid }
+    security:        { provider: Y, model: mid, thinking: medium }
     quality:         { provider: Z, model: mid }
-    correctness:     { provider: X, model: mid }
+    correctness:     { provider: X, model: mid, thinking: low }
   constraints:
     no_self_review: true
 ```
@@ -46,6 +46,10 @@ models:
 | `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced at run time. A collision where both sides resolve to `default` cannot be detected — map at least the implement roles |
 
 `provider` and `model` are opaque strings passed through to the model flag. This skill does not validate them against a catalogue; an unknown model surfaces as a launch failure with the offending role named.
+
+`thinking` is optional per role. Allowed values are pi's thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. When set, the pipeline launches that role as `--model provider/model:thinking` (pi's documented shorthand). When omitted, pi resolves the level itself: `modelThinkingLevels["provider/id"]` from settings first, then `defaultThinkingLevel`, then pi's own built-in default, which is `medium` — a per-model entry in a user's settings therefore outranks the process default, and governance never sees it. Omitting `thinking` is not the same as writing `off`: with empty settings the role runs at `medium` on any model that supports it, so a mapped role without a level is a thinking role, not a cheap one. The same `provider`/`model` pair may appear on two roles with different `thinking` — YAML role keys stay unique, so you cannot list one role twice. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only. Thinking is a launch parameter, not a different model: `sonnet-4.5` at `high` and `sonnet-4.5` at `low` still collide.
+
+Validation checks the spelling of the level, not whether the model offers it. pi clamps a level a model does not expose to the nearest one it does — a model without reasoning support runs everything at `off`, and `xhigh`/`max` exist only where the model's own level map declares them. The clamp is silent, and the run log records the level that was *requested*. Treat a level as an instruction to pi, not as a guarantee about the model.
 
 ## budgets
 
@@ -77,6 +81,9 @@ Any finding at a blocking severity rejects the attempt. Findings at follow-up se
 |---|---|
 | whole `models:` block | Every role runs the default model; log a warning once at pipeline start |
 | a single role under `models:` | That role falls back to the default model |
+| `thinking` on a role | pi resolves the level: per-model setting, then `defaultThinkingLevel`, then its built-in default (`medium`) |
+| `thinking` without `model` | Warning; thinking is ignored — the role runs the default model at pi's own level |
+| a level the model does not expose | pi clamps to the nearest supported level, silently; the log still shows the requested one |
 | `review:` sub-map under `models:` | All three reviewers use the default model; `no_self_review` still applies |
 | `constraints.no_self_review` | Treated as `true` |
 | whole `budgets:` block | Defaults above apply |
@@ -89,10 +96,11 @@ A pipeline generated from governance with none of these blocks must be functiona
 
 `automate` validates at generation time, not at run time, and fails loudly on:
 
-- `implement_master` identical to `implement` — escalation would be pointless
+- `implement_master` identical to `implement` — escalation would be pointless (compared without `thinking`)
 - fewer than two distinct providers across `review.*` — correlated reviewers
 - `max_runs_per_tree` lower than `max_attempts_controller + max_attempts_master` — no issue could ever finish
 - `max_split_depth` above 1 without an explicit override in the PRD
+- a `thinking` value that is not one of pi's levels
 
 Each failure names the offending field and the governance file it came from.
 

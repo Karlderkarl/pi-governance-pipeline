@@ -32,18 +32,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.8
+pi install npm:pi-governance-pipeline@1.0.9
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.8
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.9
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.8
+pi -e npm:pi-governance-pipeline@1.0.9
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.8
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.9
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -99,15 +99,15 @@ default model.
 
 ```yaml
 models:
-  research:          { provider: openai,    model: gpt-5-mini }
-  implement:         { provider: anthropic, model: sonnet-4.5 }
-  implement_master:  { provider: google,    model: gemini-3-pro }
+  research:          { provider: openai,    model: gpt-5-mini, thinking: low }
+  implement:         { provider: anthropic, model: sonnet-4.5, thinking: high }
+  implement_master:  { provider: google,    model: gemini-3-pro, thinking: high }
   controller:        { provider: openai,    model: gpt-5-nano }
-  master_review:     { provider: anthropic, model: opus-4.5 }
+  master_review:     { provider: anthropic, model: opus-4.5, thinking: high }
   review:
-    security:        { provider: google,    model: gemini-3-flash }
+    security:        { provider: google,    model: gemini-3-flash, thinking: medium }
     quality:         { provider: openai,    model: gpt-5 }
-    correctness:     { provider: anthropic, model: haiku-4.5 }
+    correctness:     { provider: anthropic, model: haiku-4.5, thinking: low }
   constraints:
     no_self_review: true
 budgets:
@@ -120,10 +120,18 @@ review:
   followup_severities: [medium, low]
 ```
 
+`thinking` is optional per role (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+`max`) and launches as pi's `--model provider/id:thinking` shorthand. The same model
+may appear on two roles with different thinking; identity for `no_self_review` and
+for `implement` vs `implement_master` still ignores the level. The level is checked
+for spelling, not for support: pi clamps a level a model does not expose to the
+nearest one it does, silently, and omitting it leaves the choice to pi's own
+settings.
+
 Validation runs at generation time, not at run time, and refuses:
 `implement_master` equal to `implement`, reviewers on a single provider, a tree budget
-below the attempt sum, and a split depth above 1 without a deliberate override.
-See `references/contract.md`.
+below the attempt sum, a split depth above 1 without a deliberate override, and an
+unknown `thinking` value. See `references/contract.md`.
 
 ## Safety
 

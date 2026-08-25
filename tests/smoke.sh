@@ -42,6 +42,45 @@ node "$LIB/governance.mjs" config "$TMP/AGENTS.md" >/dev/null || fail "valid con
 node "$LIB/governance.mjs" models "$TMP/AGENTS.md" | grep -q '"review.security":"google/r1"' \
   || fail "models map wrong"
 
+# thinking: optional per role, launched as provider/model:level
+cat > "$TMP/think.md" <<'MD'
+# A
+```yaml
+models:
+  implement:         { provider: anthropic, model: impl, thinking: high }
+  implement_master:  { provider: google,    model: master-impl, thinking: medium }
+  review:
+    security:        { provider: google,    model: r1, thinking: low }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: r3, thinking: off }
+```
+MD
+[[ "$(node "$LIB/governance.mjs" model "$TMP/think.md" implement)" == "anthropic/impl:high" ]] \
+  || fail "thinking not appended to invoke ref"
+[[ "$(node "$LIB/governance.mjs" model "$TMP/think.md" review.quality)" == "openai/r2" ]] \
+  || fail "role without thinking must stay provider/model"
+node "$LIB/governance.mjs" models "$TMP/think.md" | grep -q '"review.security":"google/r1:low"' \
+  || fail "models map missing thinking suffix"
+
+# same model, two roles, different thinking — legal, but identity still collides
+cat > "$TMP/think-same.md" <<'MD'
+# A
+```yaml
+models:
+  implement:         { provider: anthropic, model: sonnet, thinking: high }
+  implement_master:  { provider: google,    model: gemini }
+  review:
+    security:        { provider: google,    model: r1 }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: sonnet, thinking: low }
+```
+MD
+node "$LIB/governance.mjs" config "$TMP/think-same.md" >/dev/null \
+  || fail "same model with different thinking on two roles was refused"
+node "$LIB/governance.mjs" config "$TMP/think-same.md" 2>&1 >/dev/null \
+  | grep -q "equals models.implement" \
+  || fail "same model different thinking must still warn no_self_review"
+
 # ---------------------------------------------------------------- contract: refused
 bad() { # <yaml body> — expect exit 2
   printf '# A\n```yaml\n%s\n```\n' "$1" > "$TMP/bad.md"
@@ -57,6 +96,13 @@ bad 'models:
     security:    { provider: a, model: r1 }
     quality:     { provider: a, model: r2 }
     correctness: { provider: a, model: r3 }'
+bad 'models:
+  implement: { provider: a, model: m, thinking: ultra }
+  implement_master: { provider: b, model: n }'
+# same model, different thinking is still the same implementer
+bad 'models:
+  implement:        { provider: a, model: m, thinking: high }
+  implement_master: { provider: a, model: m, thinking: low }'
 bad 'budgets:
   max_runs_per_tree: 2'
 bad 'budgets:
@@ -142,6 +188,26 @@ printf -- "- [ ] issue-7: self review check\n" > "$proj2/tasks.md"
 out="$(cd "$proj2" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (drop case) failed: $out"
 echo "$out" | grep -q "dropped" || fail "no_self_review did not drop the colliding reviewer: $out"
 echo "$out" | grep -q "review.quality" || fail "non-colliding reviewers must still run: $out"
+
+# thinking is a launch parameter: same model at different levels still drops
+proj_think="$TMP/run-think"; mkdir -p "$proj_think/.pipeline/lib"
+cp "$SH" "$proj_think/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_think/.pipeline/lib/"
+cat > "$proj_think/AGENTS.md" <<'MD'
+# A
+```yaml
+models:
+  implement: { provider: a, model: same, thinking: high }
+  review:
+    security:    { provider: a, model: same, thinking: low }
+    quality:     { provider: b, model: q, thinking: medium }
+    correctness: { provider: c, model: r }
+```
+MD
+printf -- "- [ ] issue-8: thinking identity\n" > "$proj_think/tasks.md"
+out="$(cd "$proj_think" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (thinking) failed: $out"
+echo "$out" | grep -q "dropped" || fail "different thinking must not bypass no_self_review: $out"
+echo "$out" | grep -q "review.quality -> b/q:medium" || fail "dry-run must show thinking suffix: $out"
+echo "$out" | grep -q "implement -> a/same:high" || fail "implement thinking missing from dry-run: $out"
 
 # validator: review.* == implement_master must warn — the dangerous direction,
 # where the drop lands exactly when the master path starts
