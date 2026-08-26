@@ -63,9 +63,12 @@ if (checkOnly) {
 	process.exit(ok ? 0 : 1);
 }
 
+const RANK = { critical: 3, high: 2, medium: 1, low: 0 };
+const rank = (f) => RANK[String(f.severity).toLowerCase()] ?? -1;
+
 const unavailable = [];
 const findings = [];
-const seen = new Set();
+const seen = new Map();
 
 for (const file of files) {
 	let parsed = null;
@@ -81,9 +84,18 @@ for (const file of files) {
 	const role = parsed.role ?? file;
 	for (const finding of parsed.findings) {
 		const key = `${finding.file ?? "-"}:${finding.line ?? "-"}:${(finding.title ?? "").toLowerCase()}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		findings.push({ ...finding, role });
+		const next = { ...finding, role };
+		const prev = seen.get(key);
+		if (prev) {
+			// Same location+title from two reviewers: keep the higher severity.
+			// First-seen would let a later critical lose to an earlier low.
+			if (rank(prev) >= rank(next)) continue;
+			findings[findings.indexOf(prev)] = next;
+			seen.set(key, next);
+			continue;
+		}
+		seen.set(key, next);
+		findings.push(next);
 	}
 }
 

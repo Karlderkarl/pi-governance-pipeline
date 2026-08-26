@@ -34,7 +34,12 @@ Prohibited actions deserve care: they are the last line of defence in a harness 
 
 Harness-specific, and the only vendor-coupled part of governance.
 
-For pi: `SYSTEM.md` replaces or extends the system prompt for this project. Keep it short — pi's base prompt is deliberately minimal, and a long project prompt competes with it rather than complementing it. Put durable project facts in `SOUL.md` and behavioural rules in `AGENTS.md`; reserve `SYSTEM.md` for what genuinely must sit in the system prompt.
+Keep a short `SYSTEM.md` at the repository root as the human-readable source of truth, next to `SOUL.md`, `AGENTS.md`, and `MEMORY.md`. Pi does **not** load a root `SYSTEM.md`. It loads:
+
+- `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global) — **replaces** the default system prompt
+- `.pi/APPEND_SYSTEM.md` or `~/.pi/agent/APPEND_SYSTEM.md` — **appends** without replacing
+
+Replacing the default prompt is a much larger step than appending. `/govern` writes the root file and copies it to `.pi/APPEND_SYSTEM.md` so it takes effect. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. Keep it short — put durable project facts in `SOUL.md` and behavioural rules in `AGENTS.md`; reserve this file for what genuinely must sit in the system prompt.
 
 For Claude Code, the same extracted facts render as `CLAUDE.md` instead. One extraction, two renderers — never two extraction paths.
 

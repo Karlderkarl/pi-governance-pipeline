@@ -11,7 +11,7 @@
 //   node governance.mjs state attempt  <dir> <root_id> <issue_id> controller|master
 //   node governance.mjs state attempts <dir> <root_id> <issue_id> -> counters + status as JSON
 //   node governance.mjs state escalate <dir> <root_id> <issue_id> -> force the master path
-//   node governance.mjs state budget   <dir> <root_id> -> exit 0 = budget left, 3 = exhausted
+//   node governance.mjs state budget   <dir> <root_id> [--set n] -> exit 0 = budget left, 3 = exhausted
 //
 // Exit codes: 0 ok, 1 usage/IO error, 2 contract validation failed, 3 budget exhausted.
 
@@ -44,26 +44,42 @@ const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhi
 
 // Supports the contract subset: nested maps by indentation, inline maps
 // `{ a: b }`, inline lists `[a, b]`, scalars, booleans, integers, # comments.
+function contractError(message) {
+	const error = new Error(message);
+	error.code = "CONTRACT";
+	return error;
+}
+
 function parseYamlSubset(text) {
 	const root = {};
-	const stack = [{ indent: -1, node: root }];
+	const stack = [{ indent: -1, node: root, path: "" }];
 	for (const raw of text.split(/\r?\n/)) {
 		const line = stripComment(raw);
 		if (!line.trim()) continue;
 		const indent = line.length - line.trimStart().length;
 		const trimmed = line.trim();
 		const sep = trimmed.indexOf(":");
-		if (sep === -1) continue; // block sequences are not part of the contract
+		if (sep === -1) {
+			// Block sequences parse to an empty map and crash later as .join().
+			if (trimmed.startsWith("- ") || trimmed === "-") {
+				const field = stack[stack.length - 1].path || "config";
+				throw contractError(
+					`AGENTS.md ${field} uses a YAML block sequence; write flow style (e.g. [critical, high])`,
+				);
+			}
+			continue;
+		}
 		const key = trimmed.slice(0, sep).trim();
 		const rest = trimmed.slice(sep + 1).trim();
 		while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
-		const parent = stack[stack.length - 1].node;
+		const parent = stack[stack.length - 1];
+		const path = parent.path ? `${parent.path}.${key}` : key;
 		if (rest === "") {
 			const child = {};
-			parent[key] = child;
-			stack.push({ indent, node: child });
+			parent.node[key] = child;
+			stack.push({ indent, node: child, path });
 		} else {
-			parent[key] = parseScalar(rest);
+			parent.node[key] = parseScalar(rest);
 		}
 	}
 	return root;
@@ -223,16 +239,45 @@ export function validate(config) {
 		errors.push(`AGENTS.md models.review.* uses a single provider (${[...providers][0]}); reviewers must span at least two`);
 	}
 	const b = config.budgets;
-	if (b.max_runs_per_tree < b.max_attempts_controller + b.max_attempts_master) {
+	const requireInt = (field, v, min) => {
+		if (!Number.isInteger(v) || v < min) {
+			errors.push(`AGENTS.md budgets.${field} must be an integer >= ${min}; got ${JSON.stringify(v)}`);
+			return false;
+		}
+		return true;
+	};
+	const ctrlOk = requireInt("max_attempts_controller", b.max_attempts_controller, 1);
+	const masterOk = requireInt("max_attempts_master", b.max_attempts_master, 1);
+	const treeOk = requireInt("max_runs_per_tree", b.max_runs_per_tree, 1);
+	const splitOk = requireInt("max_split_depth", b.max_split_depth, 0);
+	if (ctrlOk && masterOk && treeOk && b.max_runs_per_tree < b.max_attempts_controller + b.max_attempts_master) {
 		errors.push(
 			`AGENTS.md budgets.max_runs_per_tree (${b.max_runs_per_tree}) is below max_attempts_controller + max_attempts_master (${b.max_attempts_controller + b.max_attempts_master}); no issue could ever finish`,
 		);
 	}
-	if (b.max_split_depth > 1 && process.env.PIPELINE_ALLOW_DEEP_SPLIT !== "1") {
+	if (splitOk && b.max_split_depth > 1 && process.env.PIPELINE_ALLOW_DEEP_SPLIT !== "1") {
 		errors.push(
 			`AGENTS.md budgets.max_split_depth is ${b.max_split_depth}; depth above 1 grows exponentially. Set PIPELINE_ALLOW_DEEP_SPLIT=1 to override deliberately`,
 		);
 	}
+	const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
+	const requireSeverityList = (field, v) => {
+		if (!Array.isArray(v)) {
+			errors.push(
+				`AGENTS.md ${field} must be an array of severity strings (critical, high, medium, low); got ${JSON.stringify(v)}. Use flow style: [critical, high]`,
+			);
+			return;
+		}
+		for (const item of v) {
+			if (!SEVERITIES.has(String(item).toLowerCase())) {
+				errors.push(
+					`AGENTS.md ${field} contains unknown severity (${item}); expected critical, high, medium, low`,
+				);
+			}
+		}
+	};
+	requireSeverityList("review.blocking_severities", config.review.blocking_severities);
+	requireSeverityList("review.followup_severities", config.review.followup_severities);
 	eachMappedRole(m, (path, entry) => {
 		const thinking = thinkingRef(entry);
 		if (!thinking) return;
@@ -365,6 +410,20 @@ function stateCommand(args, config) {
 			return saveState(dir, rootId, state);
 		}
 		case "budget": {
+			const setAt = rest.indexOf("--set");
+			if (setAt !== -1) {
+				const raw = rest[setAt + 1];
+				const n = Number(raw);
+				if (!Number.isInteger(n) || n < 1) {
+					throw new Error(`max_runs_per_tree must be an integer >= 1; got ${raw}`);
+				}
+				const state = loadState(dir, rootId);
+				if (n < state.runs_used) {
+					throw new Error(`cannot lower max_runs_per_tree to ${n}; ${state.runs_used} runs already used`);
+				}
+				state.max_runs_per_tree = n;
+				return saveState(dir, rootId, state);
+			}
 			const state = loadState(dir, rootId);
 			const left = state.max_runs_per_tree - state.runs_used;
 			process.stdout.write(`${JSON.stringify({ runs_used: state.runs_used, runs_left: left })}\n`);
@@ -386,6 +445,7 @@ function usage() {
 			"  governance.mjs model   <AGENTS.md> <role.path>",
 			"  governance.mjs models  <AGENTS.md>",
 			"  governance.mjs state init|show|budget <dir> <root_id>",
+			"  governance.mjs state budget   <dir> <root_id> --set <n>",
 			"  governance.mjs state issue    <dir> <root_id> <issue_id> [status]",
 			"  governance.mjs state attempt  <dir> <root_id> <issue_id> controller|master",
 			"  governance.mjs state attempts <dir> <root_id> <issue_id>",
@@ -444,7 +504,8 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
 	try {
 		main(process.argv.slice(2));
 	} catch (error) {
-		process.stderr.write(`error: ${error.message}\n`);
-		process.exit(1);
+		const contract = error.code === "CONTRACT";
+		process.stderr.write(`${contract ? "contract error" : "error"}: ${error.message}\n`);
+		process.exit(contract ? 2 : 1);
 	}
 }

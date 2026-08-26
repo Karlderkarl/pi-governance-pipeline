@@ -30,6 +30,15 @@ node --check "$LIB/gate.mjs" || fail "gate.mjs has a syntax error"
 npx --yes --package typescript@5.8.3 tsc --noEmit -p "$ROOT/tests/tsconfig.guard.json" \
   || fail "pipeline-guard.ts failed tsc --noEmit"
 
+# README install examples must track package.json (release checklist).
+ver="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$ROOT/package.json")"
+grep -F "npm:pi-governance-pipeline@$ver" "$ROOT/README.md" >/dev/null \
+  || fail "README npm install example is not pinned to package.json ($ver)"
+grep -F "git:github.com/Karlderkarl/pi-governance-pipeline@v$ver" "$ROOT/README.md" >/dev/null \
+  || fail "README git install example is not pinned to package.json ($ver)"
+grep -F "pi -e npm:pi-governance-pipeline@$ver" "$ROOT/README.md" >/dev/null \
+  || fail "README one-run install example is not pinned to package.json ($ver)"
+
 # ---------------------------------------------------------------- contract: valid
 cat > "$TMP/AGENTS.md" <<'MD'
 # AGENTS
@@ -121,6 +130,16 @@ bad 'budgets:
   max_runs_per_tree: 2'
 bad 'budgets:
   max_split_depth: 3'
+bad 'budgets:
+  max_runs_per_tree: twenty'
+bad 'budgets:
+  max_attempts_controller: 0'
+bad 'review:
+  blocking_severities:
+    - critical
+    - high'
+bad 'review:
+  blocking_severities: [critical, banana]'
 
 printf '# A\n```yaml\nbudgets:\n  max_split_depth: 3\n```\n' > "$TMP/deep.md"
 PIPELINE_ALLOW_DEEP_SPLIT=1 node "$LIB/governance.mjs" config "$TMP/deep.md" >/dev/null 2>&1 \
@@ -153,6 +172,16 @@ grep -q '"verdict": "blocked"' "$TMP/gate-out.json" || fail "gate verdict must b
 node "$LIB/gate.mjs" --check "$TMP/r-ok.json" >/dev/null || fail "--check rejected valid reviewer json"
 if node "$LIB/gate.mjs" --check "$TMP/r-bad.json" >/dev/null; then fail "--check accepted garbage"; fi
 
+# Dedup keeps the highest severity, not the first file on the command line.
+echo '{"role":"security","verdict":"approve","findings":[{"severity":"low","file":"a.ts","line":10,"title":"Unvalidated input"}]}' > "$TMP/r-low.json"
+echo '{"role":"correctness","verdict":"reject","findings":[{"severity":"critical","file":"a.ts","line":10,"title":"unvalidated input"}]}' > "$TMP/r-crit.json"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 "$TMP/r-low.json" "$TMP/r-crit.json" > "$TMP/gate-sev.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "low-then-critical must block (got $rc)"
+grep -q '"verdict": "blocked"' "$TMP/gate-sev.json" || fail "low-then-critical verdict must be blocked"
+grep -q '"severity": "critical"' "$TMP/gate-sev.json" || fail "dedup dropped the later critical"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 "$TMP/r-crit.json" "$TMP/r-low.json" >/dev/null || rc=$?
+[[ $rc -eq 4 ]] || fail "critical-then-low must block (got $rc)"
+
 # ---------------------------------------------------------------- state store
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state init "$TMP/proj" issue-1 >/dev/null
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state attempt "$TMP/proj" issue-1 issue-1 controller >/dev/null
@@ -168,6 +197,16 @@ att="$(node "$LIB/governance.mjs" state attempts "$TMP/proj" issue-1 issue-1)"
 printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: 7\n```\n' > "$TMP/custom.md"
 GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state init "$TMP/proj2" issue-9 \
   | grep -q '"max_runs_per_tree": 7' || fail "configured budget not honored by state init"
+
+# Frozen tree budget: a later AGENTS.md edit must not change an existing tree;
+# --set is the supported way to raise the ceiling.
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: 5\n```\n' > "$TMP/custom.md"
+GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state init "$TMP/proj2" issue-9 \
+  | grep -q '"max_runs_per_tree": 7' || fail "state init overwrote a frozen tree budget"
+GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state budget "$TMP/proj2" issue-9 --set 11 \
+  | grep -q '"max_runs_per_tree": 11' || fail "state budget --set did not raise the ceiling"
+rc=0; GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state budget "$TMP/proj2" issue-9 --set 0 >/dev/null 2>&1 || rc=$?
+[[ "$rc" -ne 0 ]] || fail "state budget --set 0 was accepted"
 
 # ---------------------------------------------------------------- auto-develop.sh
 proj="$TMP/run"; mkdir -p "$proj/.pipeline/lib"

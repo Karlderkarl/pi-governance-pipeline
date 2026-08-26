@@ -1,5 +1,5 @@
 ---
-description: Generate or audit governance files (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) from a PRD
+description: Generate or audit governance files (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md, .pi/APPEND_SYSTEM.md) from a PRD
 argument-hint: "[path-to-PRD]"
 ---
 Load the `governance-pipeline` skill (read its SKILL.md and `references/governance-files.md`) and run **Mode: govern**.

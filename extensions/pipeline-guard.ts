@@ -17,8 +17,11 @@
  *
  * This is a speed bump, not a sandbox. Patterns match the command string the
  * agent typed, not a security boundary: `rm -rf "$HOME"`, `eval`, `bash -c`,
- * and runtime-constructed commands slip through. Run the pipeline in a
- * container or VM when you need isolation.
+ * and runtime-constructed commands slip through. The governance gate covers
+ * the `write` and `edit` tools, plus obvious bash write paths (`sed -i`,
+ * `tee`, redirections, `mv`/`cp`/`rm`) that name a governance file. It is not
+ * a sandbox; `--exclude-tools bash` or a container is the only real boundary.
+ * Run the pipeline in a container or VM when you need isolation.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -42,7 +45,24 @@ const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bnpm\s+publish\b|\bpi\s+install\b/, reason: "package publish or install" },
 ];
 
-const GOVERNANCE = ["SOUL.md", "AGENTS.md", "SYSTEM.md", "CLAUDE.md", "MEMORY.md"];
+const GOVERNANCE = ["SOUL.md", "AGENTS.md", "APPEND_SYSTEM.md", "SYSTEM.md", "CLAUDE.md", "MEMORY.md"];
+
+function governanceFileIn(text: string): string | undefined {
+	return GOVERNANCE.find((g) => {
+		const esc = g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		return new RegExp(`(?:^|[^A-Za-z0-9_])${esc}(?:[^A-Za-z0-9_]|$)`).test(text);
+	});
+}
+
+function bashWritesGovernance(command: string): string | undefined {
+	const name = governanceFileIn(command);
+	if (!name) return;
+	const writey =
+		/(^|[\s;|&])(tee|sed\s+-i)\b/.test(command) ||
+		/(^|[\s;|&])(mv|cp|rm)\b/.test(command) ||
+		/>>?/.test(command);
+	return writey ? name : undefined;
+}
 
 function stateDir(cwd: string): string {
 	return join(cwd, ".pipeline", "state");
@@ -100,8 +120,22 @@ export default function (pi: ExtensionAPI) {
 				if (!ok) return { block: true, reason: `pipeline-guard: ${destructive.reason} declined by the user` };
 				return;
 			}
+			const gov = bashWritesGovernance(command);
+			if (gov) {
+				if (!ctx.hasUI) {
+					if (process.env.PIPELINE_ALLOW_GOVERNANCE_WRITE !== "1") {
+						return {
+							block: true,
+							reason: `pipeline-guard: ${gov} may not be rewritten in a non-interactive run. Set PIPELINE_ALLOW_GOVERNANCE_WRITE=1 for the govern step itself.`,
+						};
+					}
+				} else {
+					const ok = await ctx.ui.confirm("Governance write", `Modify ${gov} via bash?\n\n${command}`);
+					if (!ok) return { block: true, reason: `pipeline-guard: ${gov} write declined` };
+				}
+			}
 			// Unattended pre-approval covers the rest of the privileged list;
-			// the governance-write gate below stays armed regardless.
+			// the governance-write gate above stays armed regardless.
 			if (unattended) return;
 			const hit = PRIVILEGED.find((entry) => entry.pattern.test(command));
 			if (!hit) return;

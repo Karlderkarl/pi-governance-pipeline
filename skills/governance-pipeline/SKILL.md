@@ -58,7 +58,7 @@ Generates or audits the four governance files. Read `references/governance-files
 2. `read` the PRD. Extract stack, architecture, security, and compliance.
 3. Inspect the repo for actual build config, dependencies, and structure. Use `find` and `grep`, not assumptions. Where the PRD and the repo disagree, report the conflict — do not silently prefer one.
 4. Resolve open decisions (agent roles, model routing, git conventions, budgets).
-5. Write concrete values, never vague placeholders. Anything unresolved gets an explicit marker: `[NEEDS PRD CLARIFICATION]`, `[USER DECISION REQUIRED]`.
+5. Write concrete values, never vague placeholders. Anything unresolved gets an explicit marker: `[NEEDS PRD CLARIFICATION]`, `[USER DECISION REQUIRED]`. Write `SYSTEM.md` at the repository root (source of truth) and copy it to `.pi/APPEND_SYSTEM.md` so pi actually loads it — a root `SYSTEM.md` is inert. Prefer append over `.pi/SYSTEM.md`, which replaces pi's default prompt.
 6. Present a summary before writing.
 
 **Never blindly overwrite.** If governance files already exist, audit first and ask per file whether to overwrite, merge, or skip.

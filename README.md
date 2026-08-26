@@ -52,6 +52,12 @@ pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 
 Drop the `@version` if you would rather track the latest release.
 
+Install **user-scoped** (the default). A project-local install (`-l`) loads `pipeline-guard` in
+the pipeline's child `pi -p` processes only after a saved trust decision (`/trust`) or `--approve`.
+Without either, `defaultProjectTrust` (default `ask`) ignores project extensions in non-interactive
+modes, and nothing in the output says the guard is absent. The reference script passes `--approve`
+to those children so a project-local guard still loads once you have started the pipeline.
+
 The contract in `AGENTS.md` carries its own version (`contract v1`), independent of the package
 version. A package release that changes what a contract field means bumps both.
 
@@ -59,7 +65,7 @@ version. A package release that changes what a contract field means bumps both.
 
 | Command | Effect |
 |---|---|
-| `/govern [path-to-PRD]` | Generate or audit `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `MEMORY.md` |
+| `/govern [path-to-PRD]` | Generate or audit `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `MEMORY.md` (and copy `SYSTEM.md` to `.pi/APPEND_SYSTEM.md`) |
 | `/automate` | Generate or re-sync `auto-develop.sh` from that governance |
 | `/pipeline-audit` | Check an existing pipeline against the contract and the invariants |
 | `/pipeline-status` | Show counters, tree budget, and per-issue state |
@@ -150,8 +156,12 @@ that in two places, not one:
 - `pipeline-guard` is a speed bump against an agent reaching for a destructive
   command by accident in an interactive session, **not a sandbox**. It pattern-
   matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
-  constructed commands are not a boundary. Run the pipeline in a container or VM
-  when you need isolation. Without a UI it blocks rather than asks.
+  constructed commands are not a boundary. The governance-write gate covers the
+  `write` and `edit` tools plus obvious bash write paths (`sed -i`, `tee`,
+  redirections, `mv`/`cp`/`rm`) that name a governance file — not every way to
+  rewrite `AGENTS.md`. `--exclude-tools bash` or a container is the only real
+  boundary. Run the pipeline in a container or VM when you need isolation.
+  Without a UI it blocks rather than asks.
 - Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
   the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
   human already approved — except `sudo`, recursive `rm`, and force-push, which
@@ -172,6 +182,7 @@ rarely need changing:
 | Variable | Default | Effect |
 |---|---|---|
 | `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; larger diffs are truncated and say so |
+| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and say so |
 | `EXCLUSIONS_MAX_LINES` | `200` | Cap on prior findings re-entering the implement prompt; the newest blocks survive, the oldest are omitted |
 | `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving |
 

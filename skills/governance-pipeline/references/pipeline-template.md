@@ -43,6 +43,8 @@ One per root issue. The single source of truth for counters — no model ever ho
 
 Written after every step, not at the end. A crashed run must be resumable, and a lost counter means a budget that silently resets.
 
+`state init` is a no-op when the file already exists, so `max_runs_per_tree` is captured once at tree creation. Editing `budgets` in `AGENTS.md` afterwards does not change that tree. Raise the ceiling with `governance.mjs state budget <dir> <root_id> --set <n>` — n must be an integer ≥ 1 and not below `runs_used`.
+
 ## Main loop
 
 ```
@@ -103,4 +105,4 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 10. `--dry-run` writes no state and consumes no budget.
 11. An empty working-tree diff is a rejected attempt, not a clean review.
 12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach. `MEMORY.md` is copied out and written back — stash `-u` would otherwise swallow the blocker history.
-13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `CLAUDE.md`). An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.
+13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `CLAUDE.md`) and the `.pipeline/` and `.pi/` directories. An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.

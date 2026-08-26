@@ -47,7 +47,7 @@ models:
 
 `provider` and `model` are opaque strings passed through to the model flag. This skill does not validate them against a catalogue; an unknown model surfaces as a launch failure with the offending role named.
 
-`thinking` is optional per role. Allowed values are pi's thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. When set, the pipeline launches that role as `--model provider/model:thinking` (pi's documented shorthand). When omitted, pi resolves the level itself: `modelThinkingLevels["provider/id"]` from settings first, then `defaultThinkingLevel`, then pi's own built-in default, which is `medium` — a per-model entry in a user's settings therefore outranks the process default, and governance never sees it. Omitting `thinking` is not the same as writing `off`: with empty settings the role runs at `medium` on any model that supports it, so a mapped role without a level is a thinking role, not a cheap one. The same `provider`/`model` pair may appear on two roles with different `thinking` — YAML role keys stay unique, so you cannot list one role twice. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only. Thinking is a launch parameter, not a different model: `sonnet-4.5` at `high` and `sonnet-4.5` at `low` still collide.
+`thinking` is optional per role. Allowed values are pi's thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. When set, the pipeline launches that role as `--model provider/model:thinking` (pi's documented shorthand). When omitted, pi resolves the level from its own settings (`defaultThinkingLevel`, and any per-model pinning such as `--models` / `enabledModels` with a `provider/id:level` suffix); governance never sees it. Omitting `thinking` is not the same as writing `off`. The same `provider`/`model` pair may appear on two roles with different `thinking` — YAML role keys stay unique, so you cannot list one role twice. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only. Thinking is a launch parameter, not a different model: `sonnet-4.5` at `high` and `sonnet-4.5` at `low` still collide.
 
 Validation checks the spelling of the level, not whether the model offers it. pi clamps a level a model does not expose to the nearest one it does — a model without reasoning support runs everything at `off`, and `xhigh`/`max` exist only where the model's own level map declares them. The clamp is silent, and the run log records the level that was *requested*. Treat a level as an instruction to pi, not as a guarantee about the model.
 
@@ -63,6 +63,10 @@ budgets:
 
 `max_attempts_*` are per issue and reset on split. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth: 1` caps the branching — without it, budget alone loses to exponential growth. The bundled reference script blocks instead of splitting; the field still constrains generators that implement splitting.
 
+Every budget field must be an integer: `max_attempts_controller`, `max_attempts_master`, and `max_runs_per_tree` ≥ 1; `max_split_depth` ≥ 0. A typo such as `twenty` is a contract error, not "budget exhausted" at attempt 0.
+
+`state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` in `AGENTS.md` do not change an existing tree, in either direction — a resource limit that resets when someone edits a file is not a limit. To raise the ceiling for a running tree, use `governance.mjs state budget <dir> <root_id> --set <n>` (n must be an integer ≥ 1 and ≥ `runs_used`). Do not hand-edit the JSON.
+
 Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly six model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
 
 ## review
@@ -75,13 +79,15 @@ review:
 
 Any finding at a blocking severity rejects the attempt. Findings at follow-up severities become tickets and do not block. There is no vote count and no percentage — see the reviewer schema in `prompt-builders.md`.
 
+Both lists must be flow-style arrays of known severities (`critical`, `high`, `medium`, `low`), e.g. `[critical, high]`. A YAML block sequence (`- critical`) is a contract error: the subset parser would otherwise treat it as an empty map and crash later.
+
 ## Absent-field behaviour
 
 | Absent | Behaviour |
 |---|---|
 | whole `models:` block | Every role runs the default model; log a warning once at pipeline start |
 | a single role under `models:` | That role falls back to the default model |
-| `thinking` on a role | pi resolves the level: per-model setting, then `defaultThinkingLevel`, then its built-in default (`medium`) |
+| `thinking` on a role | pi resolves the level from its own settings; governance never sees it |
 | `thinking` without `model` | Warning; thinking is ignored — the role runs the default model at pi's own level |
 | a level the model does not expose | pi clamps to the nearest supported level, silently; the log still shows the requested one |
 | `review:` sub-map under `models:` | All three reviewers use the default model; `no_self_review` still applies |
@@ -99,8 +105,10 @@ A pipeline generated from governance with none of these blocks must be functiona
 - `implement_master` identical to `implement` — escalation would be pointless (compared without `thinking`)
 - fewer than two distinct providers across `review.*` — correlated reviewers
 - `max_runs_per_tree` lower than `max_attempts_controller + max_attempts_master` — no issue could ever finish
+- a budget field that is not an integer in range (`max_attempts_*` and `max_runs_per_tree` ≥ 1, `max_split_depth` ≥ 0)
 - `max_split_depth` above 1 without an explicit override in the PRD
 - a `thinking` value that is not one of pi's levels
+- `review.blocking_severities` or `review.followup_severities` that is not an array of known severities, or a YAML block sequence
 
 Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach the loop even if generation was skipped. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
 

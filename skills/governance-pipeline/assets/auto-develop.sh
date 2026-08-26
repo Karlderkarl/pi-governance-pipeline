@@ -30,6 +30,9 @@ TEST_CMD="${TEST_CMD:-}"                          # adapt: npm test, pytest, ...
 # build directory flushes into every reviewer prompt on every attempt.
 DIFF_MAX_BYTES="${DIFF_MAX_BYTES:-65536}"
 [[ "$DIFF_MAX_BYTES" =~ ^[0-9]+$ ]] || DIFF_MAX_BYTES=65536
+# Reviewer JSON is concatenated into the controller and master prompts.
+REVIEWERS_MAX_BYTES="${REVIEWERS_MAX_BYTES:-65536}"
+[[ "$REVIEWERS_MAX_BYTES" =~ ^[0-9]+$ ]] || REVIEWERS_MAX_BYTES=65536
 # exclusions.md grows by one block per failed gate and per rejected attempt;
 # cap what re-enters the implement prompt, or a chatty linter inflates it
 # exponentially over the attempt tree.
@@ -145,10 +148,14 @@ run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-t
   # out of pi's stdin — unredirected, pi would drain the remaining issue lines
   # into the prompt and the loop would never see them.
   local status=0
+  # --approve: non-interactive `pi -p` never shows the project-trust prompt.
+  # Without a saved /trust decision, defaultProjectTrust=ask ignores project
+  # extensions — including a project-local pipeline-guard. The human already
+  # started this pipeline in the project; load those resources.
   if [[ "$model" == "default" ]]; then
-    pi -p < "$ppath" > "$out" || status=$?
+    pi -p --approve < "$ppath" > "$out" || status=$?
   else
-    pi -p --model "$model" < "$ppath" > "$out" || status=$?
+    pi -p --approve --model "$model" < "$ppath" > "$out" || status=$?
   fi
   log_event "$root" "$issue" "$role" "$model" "$status" "$ppath"
   return $status
@@ -228,19 +235,19 @@ capture_diff() { # <outfile>
   # Leaving MEMORY.md in would let a prior blocker look like an implementation.
   if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
     git -C "$ROOT" diff HEAD -- . \
-      ':(exclude).pipeline' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
-      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)CLAUDE.md' \
+      ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
+      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
       >> "$out" 2>/dev/null || true
   else
     git -C "$ROOT" diff -- . \
-      ':(exclude).pipeline' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
-      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)CLAUDE.md' \
+      ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
+      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
       >> "$out" 2>/dev/null || true
   fi
   local f
   git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
     case "$f" in
-      .pipeline/*|MEMORY.md|SOUL.md|AGENTS.md|SYSTEM.md|CLAUDE.md|"") continue ;;
+      .pipeline/*|.pi/*|MEMORY.md|SOUL.md|AGENTS.md|SYSTEM.md|APPEND_SYSTEM.md|CLAUDE.md|"") continue ;;
     esac
     if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
       printf '\n--- new file (untracked, binary — omitted): %s ---\n' "$f" >> "$out"
@@ -499,6 +506,11 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
       # gate.mjs marks a missing reviewer file unavailable and carries on; the
       # prompt assembly must not abort the whole run on that same event.
       reviewers_json="$(cat "${ran[@]}" 2>/dev/null || true)"
+      if (( $(printf '%s' "$reviewers_json" | wc -c) > REVIEWERS_MAX_BYTES )); then
+        printf '%s' "$reviewers_json" | dd bs="$REVIEWERS_MAX_BYTES" count=1 2>/dev/null > "$work/reviewers.trunc"
+        printf '\n[reviewer JSON truncated at %s bytes; full files are in %s]\n' "$REVIEWERS_MAX_BYTES" "$work" >> "$work/reviewers.trunc"
+        reviewers_json="$(cat "$work/reviewers.trunc")"
+      fi
     else
       # Every reviewer was dropped this attempt (e.g. all equal
       # implement_master). Gating on nothing is not a gate: fail closed.
