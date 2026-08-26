@@ -69,6 +69,17 @@ grep -F "git:github.com/Karlderkarl/pi-governance-pipeline@v$ver" "$ROOT/README.
 grep -F "pi -e npm:pi-governance-pipeline@$ver" "$ROOT/README.md" >/dev/null \
   || fail "README one-run install example is not pinned to package.json ($ver)"
 
+# The skill must not re-teach the ARG_MAX launch shape the script already left.
+if grep -F '$(build_prompt' "$ROOT/skills/governance-pipeline/SKILL.md" >/dev/null; then
+  fail "SKILL.md still interpolates the prompt onto argv"
+fi
+grep -q 'pi_args+=(--approve)' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing the gated --approve launch example"
+grep -q '< "$ppath"' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing the stdin launch example"
+grep -q 'Prompts are fed to `pi -p` on stdin' "$ROOT/prompts/pipeline-audit.md" \
+  || fail "pipeline-audit.md is missing the stdin invariant"
+
 # ---------------------------------------------------------------- contract: valid
 cat > "$TMP/AGENTS.md" <<'MD'
 # AGENTS

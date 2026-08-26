@@ -56,9 +56,10 @@ load governance ─▶ validate contract ─▶ pick next issue
   │
   └─ attempt:
        implement ─▶ deterministic gates (lint, tests)
-         │  (no model — a failure here retries without consuming
-         │   a review cycle; fold clean-code checks into the lint
-         │   command, there is no separate slot)
+         │  (no model — a failure here retries without a review
+         │   cycle, but still consumes an implementation attempt and
+         │   tree budget. Fold clean-code checks into the lint
+         │   command; there is no separate slot)
          ▼
        3 reviewers in parallel, separate processes
          ▼
@@ -68,7 +69,7 @@ load governance ─▶ validate contract ─▶ pick next issue
          └─ master takes over ─▶ stash the rejected tree ─▶ attempts_master++ ─▶ retry fresh, or abort at max
 ```
 
-Increment `runs_used` once per implementation attempt, regardless of which role implemented. Check the budget before starting an attempt, not after.
+Increment `runs_used` once per implementation attempt, regardless of which role implemented — including attempts that then fail lint or tests. Check the budget before starting an attempt, not after. Research notes are cached per issue and not regenerated on retry.
 
 ## Flags
 

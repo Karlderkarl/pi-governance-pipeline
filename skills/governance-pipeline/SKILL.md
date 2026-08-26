@@ -1,12 +1,12 @@
 ---
 name: governance-pipeline
-description: Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, and hard run budgets. Use this whenever the user mentions a PRD, governance files, SOUL.md, AGENTS.md, MEMORY.md, auto-develop, an agent pipeline, multi-model review, or wants to bootstrap or audit automated development for a repository — even if they do not name this skill.
+description: Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, and hard run budgets. Use when the user wants to generate or audit governance from a PRD, or to generate, re-sync, or audit an auto-develop pipeline with multi-model review. Do not load merely because a repository contains AGENTS.md.
 compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md.
 ---
 
 # Governance Pipeline
 
-Two modes, one skill. Governance is the source of truth; the pipeline is generated from it and never hand-edited.
+Two modes, one skill. Governance is the source of truth. Copy the bundled pipeline and adapt only the documented points (`ISSUE_SOURCE`, `LINT_CMD`, `TEST_CMD`, and the stubs in `references/pipeline-template.md`) — do not rewrite the loop.
 
 ```
 PRD ──▶ [Mode: govern] ──▶ SOUL.md · AGENTS.md · SYSTEM.md · MEMORY.md
@@ -58,7 +58,7 @@ Generates or audits the four governance files. Read `references/governance-files
 2. `read` the PRD. Extract stack, architecture, security, and compliance.
 3. Inspect the repo for actual build config, dependencies, and structure. Use `find` and `grep`, not assumptions. Where the PRD and the repo disagree, report the conflict — do not silently prefer one.
 4. Resolve open decisions (agent roles, model routing, git conventions, budgets).
-5. Write concrete values, never vague placeholders. Anything unresolved gets an explicit marker: `[NEEDS PRD CLARIFICATION]`, `[USER DECISION REQUIRED]`. Write `SYSTEM.md` at the repository root (source of truth) and copy it to `.pi/APPEND_SYSTEM.md` so pi actually loads it — a root `SYSTEM.md` is inert. Prefer append over `.pi/SYSTEM.md`, which replaces pi's default prompt.
+5. Write concrete values, never vague placeholders. Anything unresolved gets an explicit marker: `[NEEDS PRD CLARIFICATION]`, `[USER DECISION REQUIRED]`. Write `SYSTEM.md` at the repository root (source of truth) and copy it to `.pi/APPEND_SYSTEM.md` so pi actually loads it — a root `SYSTEM.md` is inert. Prefer append over `.pi/SYSTEM.md`, which replaces pi's default prompt. `pipeline-guard` blocks those writes unless the user confirms or `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` is set for an unattended govern step.
 6. Present a summary before writing.
 
 **Never blindly overwrite.** If governance files already exist, audit first and ask per file whether to overwrite, merge, or skip.
@@ -90,7 +90,7 @@ research ─▶ implement/TDD ─▶ deterministic gates (lint, tests) ─▶ 3 
 
 These hold in every generated pipeline. If a requested change would break one, stop and say so.
 
-**Each step is a separate `pi -p` process.** No sub-agents — pi has none, and separate processes are what make the reviews independent. Reviewers must not see each other's verdicts.
+**Each step is a separate `pi -p` process.** pi has sub-agents; do not use them for this pipeline. Reviewers must not share a session or see each other's verdicts — that is why each role is its own process, not a child of the implementer.
 
 **The script picks the model, not the agent.** Read the mapping from `AGENTS.md`; never let a prompt choose its own model.
 
@@ -98,7 +98,7 @@ These hold in every generated pipeline. If a requested change would break one, s
 - *attempts* — a quality signal, per issue, reset when an issue is split
 - *budget* — a resource limit, held at the tree root, consumed across the whole tree, never reset
 
-**Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` become follow-up tickets. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
+**Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` are recorded as follow-ups in the gate JSON and fed back on retry. The bundled script does not open tickets for them — that is a generator adaptation point. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
 
 **The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary. The master cannot approve over a blocking gate: a deterministic severity fail outranks the model verdict.
 
@@ -112,13 +112,19 @@ The mapping lives in `AGENTS.md` under `models:`; the field reference is in `ref
 
 Two constraints the generated script must enforce:
 
-- **No self-review.** A model that implemented a diff must not review it. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel (`MIN_REVIEWERS`, default 2).
+- **No self-review.** A model that implemented a diff must not review it. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel. The bundled script passes `MIN_REVIEWERS` (default 2). `gate.mjs` itself defaults `--min-reviewers` to 1 so a direct caller is unchanged.
 - **Provider diversity.** Reviewers should span at least two providers. Three prompts against one model share its blind spots, which defeats the purpose of reviewing three times.
 
-Invoke a role like this, reading `MODEL` from the mapping:
+Invoke a role like this, reading `MODEL` from the mapping. Feed the prompt on stdin — interpolating it onto argv exceeds macOS `ARG_MAX` once the master sees the diff plus every reviewer JSON. Pass `--approve` only after the startup gate has set `PIPELINE_UNATTENDED=1`; it trusts every project-local resource, not only the guard.
 
 ```bash
-pi -p --model "$MODEL" "$(build_prompt review security "$ISSUE" "$DIFF")"
+pi_args=(-p)
+[[ "${PIPELINE_UNATTENDED:-}" == 1 ]] && pi_args+=(--approve)
+if [[ "$MODEL" == "default" ]]; then
+  pi "${pi_args[@]}" < "$ppath"
+else
+  pi "${pi_args[@]}" --model "$MODEL" < "$ppath"
+fi
 ```
 
 `$MODEL` is `provider/id`, or `provider/id:thinking` when the role sets `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). That is pi's `--model` shorthand; the separate `--thinking <level>` flag does the same job and wins when both are given, so pass one or the other, never both. pi clamps a level the model does not expose to the next higher supported level (and only falls back to a lower one when none exists above), and says nothing — the level is an instruction, not a guarantee. A cheap `thinking: low` can therefore run at `high` or `max`. The same model may be mapped to two roles with different thinking. Identity for `no_self_review` and for `implement` vs `implement_master` still ignores thinking — a different effort level is not a different model.
@@ -126,6 +132,8 @@ pi -p --model "$MODEL" "$(build_prompt review security "$ISSUE" "$DIFF")"
 Verify the exact flag names against `pi --help` for the installed version before generating the script, and use the JSON event stream mode when the caller needs to parse structured output rather than prose.
 
 ## Escalation and abort
+
+Research notes are cached per issue in the work directory and never regenerated. A bad first research pass sticks for every later attempt; delete the file to force a rerun.
 
 When the master implements a fix itself, it starts **fresh from the issue** with prior findings as an exclusion list — not from the failed diff. Inheriting the broken diff inherits the reasoning that already failed three times; a different model is only useful if it gets to think differently.
 

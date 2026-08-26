@@ -10,12 +10,17 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 3. Counters and budget are read from and written to `.pipeline/state/<root_id>.json` only, never held in a model context.
 4. The budget check precedes every implementation attempt.
 5. Deterministic gates (lint, tests — a clean-code check folds into the lint command, there is no separate slot) run before any model-based review.
-6. The master review runs on every attempt, and sees the original reviewer JSON.
-7. Abort writes the blocker to `MEMORY.md` before exiting.
-8. Without `--unattended`, no privileged step proceeds unconfirmed; the confirmation happens before the loop starts.
+6. The master review runs on every attempt, sees the original reviewer JSON, and cannot approve when the deterministic gate blocked.
+7. Abort writes the blocker to `MEMORY.md` before exiting. `block_issue` / `state issue` is called with the **tree root id**, not only the sub-issue id.
+8. Without `--unattended`, no privileged step proceeds unconfirmed; the confirmation happens before the loop starts. Child `pi -p` processes receive `--approve` only after that gate (`PIPELINE_UNATTENDED=1`).
 9. `implement_master` differs from `implement`, and reviewers span at least two providers.
 10. A resumed run restores per-issue attempt counters from the state file instead of restarting at zero.
 11. `--dry-run` performs no state writes and consumes no budget.
 12. With `no_self_review` on, a reviewer dropped for the current attempt contributes nothing to that attempt: gate, controller, and master read only the verdicts of reviewers that actually ran, and the unparseable-output retry never restarts a dropped reviewer.
+13. Prompts are fed to `pi -p` on stdin, not interpolated onto argv.
+14. An empty working-tree diff is a rejected attempt, not a clean review.
+15. `take_over` stashes the rejected tree; `MEMORY.md` is copied out and written back.
+16. Reviewer JSON whose severity is missing, untrimmed, or not `critical|high|medium|low` blocks rather than disappearing.
+17. Reviewers are separate `pi -p` processes, not sub-agents of the implementer.
 
 End with a verdict: CONFORMANT or the shortest list of changes that would make it conformant.
