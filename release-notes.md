@@ -18,6 +18,7 @@ Closes fail-open unknown severities, validates the contract on the state path, s
 ### Added
 - Prefer a fenced block marked `yaml pipeline-contract` when more than one YAML block in `AGENTS.md` contains contract keys.
 - `state` commands now emit contract warnings on stderr the same way `config` does.
+- The release workflow accepts `workflow_dispatch` with a required `tag` input, so a tag that never started the job can still be published. The job checks that tag out and still requires it to match `package.json`.
 
 ### Changed
 - README Safety: `--exclude-tools bash,powershell` (excluding `bash` alone does not close the PowerShell path). `--approve` is documented as trusting every project-local resource, not only the guard.

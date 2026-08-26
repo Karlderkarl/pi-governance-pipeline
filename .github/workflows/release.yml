@@ -12,6 +12,14 @@ on:
   push:
     tags:
       - "v*"
+  # Fallback when a tag push does not start the job. Always pass the
+  # existing tag; a dispatch on main without this would publish "main".
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v1.0.11)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -19,8 +27,12 @@ jobs:
     permissions:
       contents: write # publish the GitHub Release for the tag
       id-token: write # required: this is what mints the OIDC token
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v6
         with:
@@ -38,10 +50,17 @@ jobs:
 
       - name: Tag must match package.json version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "RELEASE_TAG must be a v* tag, got '$RELEASE_TAG'" >&2
+              exit 1
+              ;;
+          esac
+          tag="${RELEASE_TAG#v}"
           pkg="$(node -p "require('./package.json').version")"
           if [ "$tag" != "$pkg" ]; then
-            echo "tag $GITHUB_REF_NAME does not match package.json version $pkg" >&2
+            echo "tag $RELEASE_TAG does not match package.json version $pkg" >&2
             exit 1
           fi
           echo "publishing $pkg"
@@ -67,9 +86,9 @@ jobs:
           # The left side of the link does not count — re-tagging an old
           # release with newer notes present must fall back, not publish
           # notes that describe a different range.
-          esc="${GITHUB_REF_NAME//./\\.}"
+          esc="${RELEASE_TAG//./\\.}"
           if [ -f release-notes.md ] && grep -Eq '(\.\.\.|^#+ )'"$esc"'([^0-9]|$)' release-notes.md; then
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file release-notes.md
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release-notes.md
           else
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
           fi

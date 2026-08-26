@@ -207,7 +207,13 @@ bypasses both and puts a tarball on the registry that the chain never verified.
 # bump version in package.json, update the install examples above,
 # seed release-notes.md for the tag, commit, then:
 git tag vX.Y.Z && git push origin vX.Y.Z
+# if the tag push does not start the job (check Actions), publish that tag by hand:
+gh workflow run release.yml -f tag=vX.Y.Z
 ```
+
+A manual run must pass `tag`. The job checks that tag out and still refuses to
+publish when it does not match `package.json`. Dispatching against `main` without
+`tag` is rejected.
 
 ## License
 
