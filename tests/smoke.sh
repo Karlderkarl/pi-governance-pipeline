@@ -175,6 +175,7 @@ cp "$SH" "$proj/auto-develop.sh"; cp "$LIB"/*.mjs "$proj/.pipeline/lib/"
 
 # no open issues: friendly message, exit 0 (regression: pipefail killed this path)
 printf -- "- [x] closed-1: done already\n" > "$proj/tasks.md"
+git_init "$proj"
 out="$(cd "$proj" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run with no open issues failed: $out"
 echo "$out" | grep -q "no open issues" || fail "missing no-open-issues message: $out"
 
@@ -199,6 +200,7 @@ models:
 ```
 MD
 printf -- "- [ ] issue-7: self review check\n" > "$proj2/tasks.md"
+git_init "$proj2"
 out="$(cd "$proj2" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (drop case) failed: $out"
 echo "$out" | grep -q "dropped" || fail "no_self_review did not drop the colliding reviewer: $out"
 echo "$out" | grep -q "review.quality" || fail "non-colliding reviewers must still run: $out"
@@ -218,6 +220,7 @@ models:
 ```
 MD
 printf -- "- [ ] issue-8: thinking identity\n" > "$proj_think/tasks.md"
+git_init "$proj_think"
 out="$(cd "$proj_think" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (thinking) failed: $out"
 echo "$out" | grep -q "dropped" || fail "different thinking must not bypass no_self_review: $out"
 echo "$out" | grep -q "review.quality -> b/q:medium" || fail "dry-run must show thinking suffix: $out"
@@ -315,6 +318,7 @@ proj4="$TMP/run-lint"; mkdir -p "$proj4/.pipeline/lib"
 cp "$SH" "$proj4/auto-develop.sh"; cp "$LIB"/*.mjs "$proj4/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj4/AGENTS.md"
 printf -- "- [ ] issue-4: lint feedback\n" > "$proj4/tasks.md"
+git_init "$proj4"
 rc=0
 out="$(cd "$proj4" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls4.log" \
   LINT_CMD='echo "lint-broke: missing semicolon"; false' bash auto-develop.sh 2>&1)" || rc=$?
@@ -410,6 +414,7 @@ cp "$SH" "$proj7/auto-develop.sh"; cp "$LIB"/*.mjs "$proj7/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj7/AGENTS.md"
 printf -- "- [ ] issue-7: exclusions cap\n" > "$proj7/tasks.md"
 printf 'write clean code\n' > "$proj7/SOUL.md"
+git_init "$proj7"
 rc=0
 out="$(cd "$proj7" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls7.log" \
   LINT_CMD='i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo "lint-line-$i"; done; false' \
@@ -590,10 +595,19 @@ echo "$out" | grep -q "^approved: issue-to" || fail "take_over path did not appr
 # ---------------------------------------------------------------- ISSUE_SOURCE=!command and --auto-merge notice
 proj_cmd="$TMP/run-cmd"; mkdir -p "$proj_cmd/.pipeline/lib"
 cp "$SH" "$proj_cmd/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_cmd/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_cmd/AGENTS.md"
+git_init "$proj_cmd"
 out="$(cd "$proj_cmd" && ISSUE_SOURCE='!printf "%s\n" "issue-cmd: from command"' bash auto-develop.sh --dry-run --auto-merge --yes 2>&1)" \
   || fail "!command ISSUE_SOURCE dry-run failed: $out"
 echo "$out" | grep -q "issue-cmd" || fail "!command source not picked up: $out"
 echo "$out" | grep -q "auto-merge: not implemented" || fail "--auto-merge stub notice missing: $out"
+
+# A failing !command is an error, not "no open issues" with exit 0.
+rc=0
+out="$(cd "$proj_cmd" && ISSUE_SOURCE='!sh -c "exit 17"' bash auto-develop.sh --dry-run 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "failed !command source exited 0: $out"
+echo "$out" | grep -q "issue source failed (exit 17)" || fail "failed !command did not report its exit: $out"
+if echo "$out" | grep -q "no open issues"; then fail "failed !command was reported as no open issues: $out"; fi
 
 # ------------------------------------- e2e: two issues in one run (stdin leak)
 # main() drives the loop with `done <<< "$issues"`, so every child inherits the
@@ -615,5 +629,64 @@ if grep -q '^unknown$' "$TMP/calls-two.log"; then
 fi
 grep -q '^- \[x\] issue-a' "$proj_two/tasks.md" || fail "issue-a not marked done"
 grep -q '^- \[x\] issue-b' "$proj_two/tasks.md" || fail "issue-b not marked done"
+
+# ------------------------------------- e2e: MEMORY.md must not unstick a later empty issue
+# block_issue appends to MEMORY.md. If capture_diff treats that as the next
+# issue's implementation, reviewers rubber-stamp the blocker note and the
+# second issue is marked done without a line of code.
+proj_mem="$TMP/run-mem"; mkdir -p "$proj_mem/.pipeline/lib"
+cp "$SH" "$proj_mem/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_mem/.pipeline/lib/"
+cat > "$proj_mem/AGENTS.md" <<'MD'
+# A
+```yaml
+models:
+  implement:         { provider: a, model: impl }
+  implement_master:  { provider: google,    model: master-impl }
+  review:
+    security:        { provider: google,    model: r1 }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: r3 }
+budgets:
+  max_attempts_controller: 1
+  max_attempts_master: 1
+  max_runs_per_tree: 25
+```
+MD
+printf -- "- [ ] issue-A: write nothing\n- [ ] issue-B: also write nothing\n" > "$proj_mem/tasks.md"
+git_init "$proj_mem"
+rc=0
+out="$(cd "$proj_mem" && PATH="$stub_ok:$PATH" PI_IMPLEMENT=empty PI_CALLS_LOG="$TMP/calls-mem.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "two empty issues should not exit 0: $out"
+if echo "$out" | grep -q "^approved:"; then fail "an empty issue was approved via MEMORY.md: $out"; fi
+echo "$out" | grep -q "blocked: issue-A" || fail "issue-A was not blocked: $out"
+echo "$out" | grep -q "blocked: issue-B" || fail "issue-B was not blocked: $out"
+[[ -f "$proj_mem/MEMORY.md" ]] || fail "block_issue did not write MEMORY.md"
+if grep -q 'MEMORY.md' "$proj_mem/.pipeline/work/issue-B/diff.patch" 2>/dev/null; then
+  fail "issue-B review diff included MEMORY.md"
+fi
+if grep -q '^- \[x\]' "$proj_mem/tasks.md"; then fail "an empty issue was marked done"; fi
+
+# ------------------------------------- e2e: raw issue id survives sanitising
+proj_slash="$TMP/run-slash"; mkdir -p "$proj_slash/.pipeline/lib"
+cp "$SH" "$proj_slash/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_slash/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_slash/AGENTS.md"
+printf -- "- [ ] feat/login-page: slash in the id\n" > "$proj_slash/tasks.md"
+git_init "$proj_slash"
+rc=0
+out="$(cd "$proj_slash" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-slash.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "slash-id run failed (rc=$rc): $out"
+echo "$out" | grep -q "^approved: feat-login-page" || fail "slash-id issue not approved: $out"
+grep -q '^- \[x\] feat/login-page' "$proj_slash/tasks.md" || fail "raw slash id was not marked done"
+
+# ------------------------------------- no git: fail at start, do not burn the budget
+proj_nogit="$TMP/run-nogit"; mkdir -p "$proj_nogit/.pipeline/lib"
+cp "$SH" "$proj_nogit/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_nogit/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_nogit/AGENTS.md"
+printf -- "- [ ] issue-nogit: no repo\n" > "$proj_nogit/tasks.md"
+rc=0
+out="$(cd "$proj_nogit" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-nogit.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "missing git repo exited 0: $out"
+echo "$out" | grep -q "requires a git repository" || fail "missing git repo did not fail at start: $out"
+if [[ -f "$TMP/calls-nogit.log" ]]; then fail "missing git repo still invoked pi"; fi
 
 echo "smoke OK"

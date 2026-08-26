@@ -81,6 +81,10 @@ fi
 # ------------------------------------------------------------------ contract
 command -v node >/dev/null || die "node is required (contract parser and review gate)"
 [[ -f "$LIB/governance.mjs" ]] || die "missing $LIB/governance.mjs"
+# Reviewers read the working-tree diff. Without a repo the empty-diff check
+# would burn the whole tree budget and then block a correct implementation.
+git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || die "auto-develop.sh requires a git repository"
 
 CONFIG="$(node "$LIB/governance.mjs" config "$AGENTS_FILE")" || exit 2
 MODELS_JSON="$(node "$LIB/governance.mjs" models "$AGENTS_FILE")" || exit 2
@@ -219,14 +223,25 @@ EOF
 capture_diff() { # <outfile>
   local out="$1"; : > "$out"
   git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  # Governance files never belong in the review diff: the implement prompt
+  # forbids them, pipeline-guard blocks them, and block_issue writes MEMORY.md.
+  # Leaving MEMORY.md in would let a prior blocker look like an implementation.
   if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
-    git -C "$ROOT" diff HEAD >> "$out" 2>/dev/null || true
+    git -C "$ROOT" diff HEAD -- . \
+      ':(exclude).pipeline' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
+      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)CLAUDE.md' \
+      >> "$out" 2>/dev/null || true
   else
-    git -C "$ROOT" diff >> "$out" 2>/dev/null || true
+    git -C "$ROOT" diff -- . \
+      ':(exclude).pipeline' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
+      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)CLAUDE.md' \
+      >> "$out" 2>/dev/null || true
   fi
   local f
   git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
-    case "$f" in .pipeline/*|"") continue ;; esac
+    case "$f" in
+      .pipeline/*|MEMORY.md|SOUL.md|AGENTS.md|SYSTEM.md|CLAUDE.md|"") continue ;;
+    esac
     if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
       printf '\n--- new file (untracked, binary — omitted): %s ---\n' "$f" >> "$out"
       continue
@@ -249,7 +264,9 @@ next_issues() {
   # markdown checkbox. Adapting to gh or Jira is then a one-line assignment,
   # not a rewrite of this function. eval is intentional and matches LINT_CMD.
   if [[ "$ISSUE_SOURCE" == !* ]]; then
-    eval "${ISSUE_SOURCE#!}"
+    local rc=0
+    eval "${ISSUE_SOURCE#!}" || rc=$?
+    (( rc == 0 )) || die "issue source failed (exit $rc)"
     return 0
   fi
   [[ -f "$ISSUE_SOURCE" ]] || die "issue source not found: $ISSUE_SOURCE"
@@ -294,8 +311,10 @@ block_issue() { # <issue_id> <reason> — never silent: MEMORY.md, state, human
 # ----------------------------------------------------------------------- loop
 process_issue() {
   local issue_line="$1"
-  local issue_id="${issue_line%%:*}"
+  local issue_raw="${issue_line%%:*}"
+  local issue_id="$issue_raw"
   # The id becomes a directory name — keep it path-safe whatever tasks.md holds.
+  # mark_issue_done still needs the raw token; sanitising it made slash ids a no-op.
   issue_id="${issue_id//[^A-Za-z0-9._-]/-}"
   [[ -n "$issue_id" ]] || { echo "cannot derive an issue id from: $issue_line" >&2; FAILED_ISSUES+=("$issue_line"); return 0; }
   local root="$issue_id"
@@ -543,7 +562,7 @@ Emit ONLY this JSON, no prose and no code fence:
     if [[ "$decision" == "approve" && "$gate_status" == "0" ]]; then
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state issue "$PIPELINE_DIR" "$root" "$issue_id" done >/dev/null || true
       echo "approved: $issue_id"
-      mark_issue_done "$issue_id"
+      mark_issue_done "$issue_raw"
       (( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step"
       return 0
     fi
@@ -581,7 +600,11 @@ Emit ONLY this JSON, no prose and no code fence:
 
 main() {
   mkdir -p "$PIPELINE_DIR"/{state,logs,prompts,work}
-  local issues; issues="$(next_issues)"
+  # next_issues may die (failed !command). A bare $(...) would swallow that
+  # exit and report "no open issues" with status 0 — the cron-job lie.
+  local issues rc=0
+  issues="$(next_issues)" || rc=$?
+  (( rc == 0 )) || exit "$rc"
   [[ -n "$issues" ]] || { echo "no open issues in $ISSUE_SOURCE"; return 0; }
   local line
   while IFS= read -r line; do

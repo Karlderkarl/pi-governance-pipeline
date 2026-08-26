@@ -6,11 +6,12 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
+    "types": [],
     "baseUrl": ".",
     "paths": {
       "@earendil-works/pi-coding-agent": ["./shims/pi-coding-agent"],
       "typebox": ["./shims/typebox"]
     }
   },
-  "files": ["../extensions/pipeline-guard.ts"]
+  "files": ["../extensions/pipeline-guard.ts", "./shims/node.d.ts"]
 }
