@@ -9,9 +9,16 @@
  *
  * Off-switch: PIPELINE_GUARD=off. Unattended runs: PIPELINE_UNATTENDED=1 skips
  * the privileged-command confirmations (a human pre-answered them at the
- * pipeline's startup gate). Governance writes keep their own gate
+ * pipeline's startup gate) except the highest-consequence patterns (sudo,
+ * recursive delete, force-push), which stay armed unless
+ * PIPELINE_ALLOW_DESTRUCTIVE=1. Governance writes keep their own gate
  * (PIPELINE_ALLOW_GOVERNANCE_WRITE) in every mode — a pipeline run must never
  * rewrite the contract it runs on.
+ *
+ * This is a speed bump, not a sandbox. Patterns match the command string the
+ * agent typed, not a security boundary: `rm -rf "$HOME"`, `eval`, `bash -c`,
+ * and runtime-constructed commands slip through. Run the pipeline in a
+ * container or VM when you need isolation.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -20,13 +27,17 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
+// Always armed, including unattended runs, unless PIPELINE_ALLOW_DESTRUCTIVE=1.
+const DESTRUCTIVE: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bgit\s+push\b[^\n]*\s(--force|-f)\b/, reason: "force-push" },
+	{ pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\b/, reason: "recursive delete" },
+	{ pattern: /\bsudo\b/, reason: "privilege escalation" },
+];
+
+const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bgit\s+push\b[^\n]*\b(main|master)\b/, reason: "push to a protected branch" },
 	{ pattern: /\bgit\s+reset\s+--hard\b/, reason: "hard reset (discards work)" },
 	{ pattern: /\bgh\s+pr\s+merge\b/, reason: "pull request merge" },
-	{ pattern: /\brm\s+-[a-z]*[rf][a-z]*\s+\//, reason: "recursive delete from an absolute path" },
-	{ pattern: /\bsudo\b/, reason: "privilege escalation" },
 	{ pattern: /\bcurl\b[^\n|]*\|\s*(ba)?sh\b/, reason: "piping a download into a shell" },
 	{ pattern: /\bnpm\s+publish\b|\bpi\s+install\b/, reason: "package publish or install" },
 ];
@@ -73,10 +84,25 @@ export default function (pi: ExtensionAPI) {
 		if (!enabled) return;
 
 		if (isToolCallEventType("bash", event)) {
-			// Unattended pre-approval covers privileged commands only; the
-			// governance-write gate below stays armed regardless.
-			if (unattended) return;
 			const command = event.input.command ?? "";
+			const destructive = DESTRUCTIVE.find((entry) => entry.pattern.test(command));
+			if (destructive && process.env.PIPELINE_ALLOW_DESTRUCTIVE !== "1") {
+				if (!ctx.hasUI) {
+					return {
+						block: true,
+						reason: `pipeline-guard: refused ${destructive.reason} in a non-interactive session. Set PIPELINE_ALLOW_DESTRUCTIVE=1 deliberately to allow it.`,
+					};
+				}
+				const ok = await ctx.ui.confirm(
+					"Destructive command",
+					`${destructive.reason}:\n\n${command}\n\nAllow?`,
+				);
+				if (!ok) return { block: true, reason: `pipeline-guard: ${destructive.reason} declined by the user` };
+				return;
+			}
+			// Unattended pre-approval covers the rest of the privileged list;
+			// the governance-write gate below stays armed regardless.
+			if (unattended) return;
 			const hit = PRIVILEGED.find((entry) => entry.pattern.test(command));
 			if (!hit) return;
 			// No UI means no consent. Blocking is the only safe default here:

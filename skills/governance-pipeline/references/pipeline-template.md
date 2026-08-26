@@ -62,8 +62,8 @@ load governance ─▶ validate contract ─▶ pick next issue
          ▼
        controller ─▶ master review
          ├─ approve ─▶ commit ─▶ PR ─▶ update governance ─▶ next issue
-         ├─ reject  ─▶ attempts_controller++ ─▶ retry, or split at max
-         └─ master takes over ─▶ attempts_master++ ─▶ retry, or abort at max
+         ├─ reject  ─▶ attempts_controller++ ─▶ retry in place (dirty tree kept), or split at max
+         └─ master takes over ─▶ stash the rejected tree ─▶ attempts_master++ ─▶ retry fresh, or abort at max
 ```
 
 Increment `runs_used` once per implementation attempt, regardless of which role implemented. Check the budget before starting an attempt, not after.
@@ -73,7 +73,7 @@ Increment `runs_used` once per implementation attempt, regardless of which role 
 | Flag | Default | Effect |
 |---|---|---|
 | `--unattended` | off | Skips per-step confirmation; requires the pre-loop confirmation to have passed |
-| `--auto-merge` | off | Merges an approved PR |
+| `--auto-merge` | off | **Stub in the reference script.** Parsed and confirmed at the safety gate so an adapted pipeline can merge an approved PR; the bundled script prints a notice and does not merge. |
 | `--dry-run` | off | Renders prompts and prints the plan without calling a model |
 | `--issue <id>` | — | Runs a single issue |
 
@@ -101,3 +101,5 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 8. Without `--unattended`, no privileged step proceeds unconfirmed.
 9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.
 10. `--dry-run` writes no state and consumes no budget.
+11. An empty working-tree diff is a rejected attempt, not a clean review.
+12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach.

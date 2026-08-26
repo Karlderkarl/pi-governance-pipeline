@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Stub pi for hermetic pipeline tests. Mirrors pi's own input handling: piped
+# (non-TTY) stdin is drained and used as the message, which is the production
+# launch shape (`pi -p < prompt.txt`); argv is the fallback.
+set -euo pipefail
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+log() { [[ -n "${PI_CALLS_LOG:-}" ]] && printf '%s\n' "$1" >> "$PI_CALLS_LOG" || true; }
+
+case "$last" in
+  "Gather context"*)
+    log research
+    echo "research notes"
+    ;;
+  "Implement this issue"*)
+    log implement
+    if [[ "${PI_IMPLEMENT:-write}" == write ]]; then
+      printf 'implemented\n' >> ./impl.txt
+    fi
+    ;;
+  *"REMINDER"*)
+    log review-retry
+    echo '{"role":"retry","verdict":"approve","findings":[]}'
+    ;;
+  "You review a diff for one concern only: security"*)
+    log review-security
+    echo '{"role":"security","verdict":"approve","findings":[]}'
+    ;;
+  "You review a diff for one concern only: quality"*)
+    log review-quality
+    echo '{"role":"quality","verdict":"approve","findings":[]}'
+    ;;
+  "You review a diff for one concern only: correctness"*)
+    log review-correctness
+    echo '{"role":"correctness","verdict":"approve","findings":[]}'
+    ;;
+  "Merge these reviewer"*)
+    log controller
+    echo '{}'
+    ;;
+  "Decide this attempt"*)
+    log master
+    echo '{"decision":"approve","reasons":["ok"]}'
+    ;;
+  *)
+    log unknown
+    echo "notes"
+    ;;
+esac

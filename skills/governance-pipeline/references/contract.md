@@ -94,7 +94,7 @@ A pipeline generated from governance with none of these blocks must be functiona
 
 ## Validation
 
-`automate` validates at generation time, not at run time, and fails loudly on:
+`automate` validates at generation time and fails loudly on:
 
 - `implement_master` identical to `implement` — escalation would be pointless (compared without `thinking`)
 - fewer than two distinct providers across `review.*` — correlated reviewers
@@ -102,6 +102,6 @@ A pipeline generated from governance with none of these blocks must be functiona
 - `max_split_depth` above 1 without an explicit override in the PRD
 - a `thinking` value that is not one of pi's levels
 
-Each failure names the offending field and the governance file it came from.
+Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach the loop even if generation was skipped. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
 
 Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model — `no_self_review` would leave fewer than two reviewers on that path, and the runtime gate blocks below that floor instead of approving.

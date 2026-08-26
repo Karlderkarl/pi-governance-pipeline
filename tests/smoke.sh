@@ -11,10 +11,24 @@ trap 'rm -rf "$TMP"' EXIT
 
 fail() { echo "smoke FAIL: $*" >&2; exit 1; }
 
+git_init() {
+  # Commit the seeded tree so capture_diff does not treat auto-develop.sh as
+  # the implementation. The script contains "Gather context" / "concern only"
+  # strings that would otherwise match every stub arm.
+  git -C "$1" init -q
+  printf '.pipeline/\n' > "$1/.gitignore"
+  git -C "$1" add -A
+  git -C "$1" -c user.email=t@t -c user.name=t commit -qm init
+}
+
 # ---------------------------------------------------------------- syntax
 bash -n "$SH" || fail "auto-develop.sh has a syntax error"
 node --check "$LIB/governance.mjs" || fail "governance.mjs has a syntax error"
 node --check "$LIB/gate.mjs" || fail "gate.mjs has a syntax error"
+
+# The extension ships as raw TypeScript. Catch a type error before the registry.
+npx --yes --package typescript@5.8.3 tsc --noEmit -p "$ROOT/tests/tsconfig.guard.json" \
+  || fail "pipeline-guard.ts failed tsc --noEmit"
 
 # ---------------------------------------------------------------- contract: valid
 cat > "$TMP/AGENTS.md" <<'MD'
@@ -251,26 +265,31 @@ budgets:
 ```
 MD
 printf -- "- [ ] issue-3: escalated self review\n" > "$proj3/tasks.md"
+git_init "$proj3"
 
 # A stub pi whose answer depends on the prompt it receives; logs every call.
 stub="$TMP/stub-bin"; mkdir -p "$stub"
 cat > "$stub/pi" <<'EOF'
 #!/usr/bin/env bash
-for last; do :; done   # the prompt is the final argument
+# Emulate pi: piped (non-TTY) stdin is drained and becomes the message.
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
 case "$last" in
-  *"Gather context"*)       echo research >> "${PI_CALLS_LOG:?}"; echo "research notes" ;;
-  *"Implement this issue"*) echo implement >> "${PI_CALLS_LOG:?}" ;;
-  *"concern only: security"*)
+  "Gather context"*)       echo research >> "${PI_CALLS_LOG:?}"; echo "research notes" ;;
+  "Implement this issue"*) echo implement >> "${PI_CALLS_LOG:?}"
+    printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only: security"*)
     echo review-security >> "${PI_CALLS_LOG:?}"
     echo '{"role":"security","verdict":"reject","findings":[{"severity":"high","file":"f","line":1,"title":"stale-marker","rationale":"r","suggestion":"s"}]}' ;;
-  *"concern only: quality"*)
+  "You review a diff for one concern only: quality"*)
     echo review-quality >> "${PI_CALLS_LOG:?}"
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  *"concern only: correctness"*)
+  "You review a diff for one concern only: correctness"*)
     echo review-correctness >> "${PI_CALLS_LOG:?}"
     echo '{"role":"correctness","verdict":"approve","findings":[]}' ;;
-  *"Merge these reviewer"*) echo controller >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
-  *"Decide this attempt"*)  echo master >> "${PI_CALLS_LOG:?}"
+  "Merge these reviewer"*) echo controller >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
+  "Decide this attempt"*)  echo master >> "${PI_CALLS_LOG:?}"
     echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo unknown >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
 esac
@@ -354,18 +373,22 @@ proj6="$TMP/run-floor"; mkdir -p "$proj6/.pipeline/lib"
 cp "$SH" "$proj6/auto-develop.sh"; cp "$LIB"/*.mjs "$proj6/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj6/AGENTS.md"
 printf -- "- [ ] issue-6: shrunk panel\n" > "$proj6/tasks.md"
+git_init "$proj6"
 stub2="$TMP/stub2-bin"; mkdir -p "$stub2"
 cat > "$stub2/pi" <<'EOF'
 #!/usr/bin/env bash
-for last; do :; done   # the prompt is the final argument
+# Emulate pi: piped (non-TTY) stdin is drained and becomes the message.
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
 case "$last" in
-  *"Gather context"*)       echo "research notes" ;;
-  *"Implement this issue"*) : ;;
-  *"concern only: quality"*)
+  "Gather context"*)       echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only: quality"*)
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  *"concern only:"*)        echo 'not json at all' ;;
-  *"Merge these reviewer"*) echo '{}' ;;
-  *"Decide this attempt"*)  echo '{"decision":"approve","reasons":["ok"]}' ;;
+  "You review a diff for one concern only:"*) echo 'not json at all' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*)  echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
 EOF
@@ -423,5 +446,174 @@ if grep -q "(attempt 1)" "$last_prompt"; then fail "oldest lint block should hav
   || fail "controller attempts must each keep their prompt"
 [[ "$(ls "$proj7"/.pipeline/prompts/issue-7/ | grep -c '^issue-7-implement_master-a')" -eq 3 ]] \
   || fail "master attempts must each keep their prompt"
+
+# ---------------------------------------------------------------- e2e: happy path + @file + tasks.md checkbox
+proj_ok="$TMP/run-happy"; mkdir -p "$proj_ok/.pipeline/lib"
+cp "$SH" "$proj_ok/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_ok/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_ok/AGENTS.md"
+printf -- "- [ ] issue-9: happy path\n" > "$proj_ok/tasks.md"
+git_init "$proj_ok"
+stub_ok="$TMP/stub-ok"; mkdir -p "$stub_ok"
+cp "$ROOT/tests/fixtures/bin/pi" "$stub_ok/pi"; chmod +x "$stub_ok/pi"
+rc=0
+out="$(cd "$proj_ok" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-ok.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "happy path failed (rc=$rc): $out"
+echo "$out" | grep -q "^approved: issue-9" || fail "happy path did not approve: $out"
+grep -q '^- \[x\] issue-9' "$proj_ok/tasks.md" || fail "approved issue not marked done in tasks.md"
+[[ -s "$proj_ok/.pipeline/work/issue-9/diff.patch" ]] || fail "happy path left an empty diff"
+# The stub drains stdin like pi does. If the prompt were not redirected in,
+# it would see main()'s issue-list here-string and log "unknown" instead of roles.
+grep -q '^master$' "$TMP/calls-ok.log" || fail "master prompt was not delivered on stdin: $(cat "$TMP/calls-ok.log")"
+
+# ---------------------------------------------------------------- e2e: empty diff is fail-closed
+proj_empty="$TMP/run-empty"; mkdir -p "$proj_empty/.pipeline/lib"
+cp "$SH" "$proj_empty/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_empty/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_empty/AGENTS.md"
+printf -- "- [ ] issue-empty: write nothing\n" > "$proj_empty/tasks.md"
+git_init "$proj_empty"
+rc=0
+out="$(cd "$proj_empty" && PATH="$stub_ok:$PATH" PI_IMPLEMENT=empty PI_CALLS_LOG="$TMP/calls-empty.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "empty diff should not approve"
+if echo "$out" | grep -q "^approved: issue-empty"; then fail "empty diff approved the issue"; fi
+grep -q "empty diff" "$proj_empty/.pipeline/work/issue-empty/exclusions.md" \
+  || fail "empty diff was not recorded in exclusions.md"
+if grep -q '^- \[x\] issue-empty' "$proj_empty/tasks.md"; then fail "empty-diff issue was marked done"; fi
+
+# ---------------------------------------------------------------- e2e: unparseable reviewer JSON, one retry
+proj_retry="$TMP/run-retry"; mkdir -p "$proj_retry/.pipeline/lib"
+cp "$SH" "$proj_retry/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_retry/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_retry/AGENTS.md"
+printf -- "- [ ] issue-retry: unparseable then ok\n" > "$proj_retry/tasks.md"
+git_init "$proj_retry"
+stub_retry="$TMP/stub-retry"; mkdir -p "$stub_retry"
+cat > "$stub_retry/pi" <<'EOF'
+#!/usr/bin/env bash
+# Emulate pi: piped (non-TTY) stdin is drained and becomes the message.
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  *"REMINDER"*)
+    echo retry >> "${PI_CALLS_LOG:?}"
+    echo '{"role":"security","verdict":"approve","findings":[]}' ;;
+  "You review a diff for one concern only: security"*)
+    echo review-security >> "${PI_CALLS_LOG:?}"
+    echo 'not json at all' ;;
+  "You review a diff for one concern only: quality"*) echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "You review a diff for one concern only: correctness"*) echo '{"role":"correctness","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_retry/pi"
+rc=0
+out="$(cd "$proj_retry" && PATH="$stub_retry:$PATH" PI_CALLS_LOG="$TMP/calls-retry.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "retry-after-garbage should approve once JSON is valid (rc=$rc): $out"
+[[ "$(grep -c review-security "$TMP/calls-retry.log")" -eq 1 ]] || fail "security reviewer should run once before retry"
+[[ "$(grep -c retry "$TMP/calls-retry.log")" -eq 1 ]] || fail "unparseable reviewer was not retried: $(cat "$TMP/calls-retry.log")"
+
+# ---------------------------------------------------------------- e2e: resume from existing state file
+proj_res="$TMP/run-resume"; mkdir -p "$proj_res/.pipeline/lib"
+cp "$SH" "$proj_res/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_res/.pipeline/lib/"
+cat > "$proj_res/AGENTS.md" <<'MD'
+# A
+```yaml
+models:
+  implement:         { provider: a, model: impl }
+  implement_master:  { provider: google,    model: master-impl }
+  review:
+    security:        { provider: google,    model: r1 }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: r3 }
+budgets:
+  max_attempts_controller: 3
+  max_attempts_master: 3
+  max_runs_per_tree: 25
+```
+MD
+printf -- "- [ ] issue-resume: continue counters\n" > "$proj_res/tasks.md"
+git_init "$proj_res"
+GOVERNANCE_AGENTS="$proj_res/AGENTS.md" node "$LIB/governance.mjs" state init "$proj_res/.pipeline" issue-resume >/dev/null
+GOVERNANCE_AGENTS="$proj_res/AGENTS.md" node "$LIB/governance.mjs" state issue "$proj_res/.pipeline" issue-resume issue-resume >/dev/null
+GOVERNANCE_AGENTS="$proj_res/AGENTS.md" node "$LIB/governance.mjs" state attempt "$proj_res/.pipeline" issue-resume issue-resume controller >/dev/null
+GOVERNANCE_AGENTS="$proj_res/AGENTS.md" node "$LIB/governance.mjs" state attempt "$proj_res/.pipeline" issue-resume issue-resume controller >/dev/null
+rc=0
+out="$(cd "$proj_res" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-resume.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "resume run failed (rc=$rc): $out"
+att="$(node "$LIB/governance.mjs" state attempts "$proj_res/.pipeline" issue-resume issue-resume)"
+# Two attempts already on disk; one more controller attempt should finish the issue.
+echo "$att" | grep -q '"controller": 3' || echo "$att" | grep -q '"controller":3' \
+  || fail "resume did not continue from stored counters: $att"
+echo "$out" | grep -q "^approved: issue-resume" || fail "resume did not approve: $out"
+
+# ---------------------------------------------------------------- e2e: take_over stashes the rejected tree
+proj_to="$TMP/run-takeover"; mkdir -p "$proj_to/.pipeline/lib"
+cp "$SH" "$proj_to/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_to/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_to/AGENTS.md"
+printf -- "- [ ] issue-to: take over\n" > "$proj_to/tasks.md"
+git_init "$proj_to"
+stub_to="$TMP/stub-to"; mkdir -p "$stub_to"
+cat > "$stub_to/pi" <<'EOF'
+#!/usr/bin/env bash
+# Emulate pi: piped (non-TTY) stdin is drained and becomes the message.
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'from-controller\n' >> ./impl.txt ;;
+  "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*)
+    if [[ -f .pipeline/work/issue-to/.took-over ]]; then
+      echo '{"decision":"approve","reasons":["fresh"]}'
+    else
+      mkdir -p .pipeline/work/issue-to
+      touch .pipeline/work/issue-to/.took-over
+      echo '{"decision":"take_over","reasons":["wrong approach"]}'
+    fi ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_to/pi"
+rc=0
+out="$(cd "$proj_to" && PATH="$stub_to:$PATH" PI_CALLS_LOG="$TMP/calls-to.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "take_over run failed (rc=$rc): $out"
+echo "$out" | grep -q "stashed working tree" || fail "take_over did not stash: $out"
+git -C "$proj_to" stash list | grep -q "pipeline: pre-take_over issue-to-" \
+  || fail "stash missing: $(git -C "$proj_to" stash list)"
+echo "$out" | grep -q "^approved: issue-to" || fail "take_over path did not approve: $out"
+
+# ---------------------------------------------------------------- ISSUE_SOURCE=!command and --auto-merge notice
+proj_cmd="$TMP/run-cmd"; mkdir -p "$proj_cmd/.pipeline/lib"
+cp "$SH" "$proj_cmd/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_cmd/.pipeline/lib/"
+out="$(cd "$proj_cmd" && ISSUE_SOURCE='!printf "%s\n" "issue-cmd: from command"' bash auto-develop.sh --dry-run --auto-merge --yes 2>&1)" \
+  || fail "!command ISSUE_SOURCE dry-run failed: $out"
+echo "$out" | grep -q "issue-cmd" || fail "!command source not picked up: $out"
+echo "$out" | grep -q "auto-merge: not implemented" || fail "--auto-merge stub notice missing: $out"
+
+# ------------------------------------- e2e: two issues in one run (stdin leak)
+# main() drives the loop with `done <<< "$issues"`, so every child inherits the
+# issue-list here-string as stdin. pi drains piped stdin and prepends it to the
+# prompt, so an unredirected launch would swallow issue two and corrupt issue
+# one's prompt. Both issues must be approved, and no role may see the list.
+proj_two="$TMP/run-two"; mkdir -p "$proj_two/.pipeline/lib"
+cp "$SH" "$proj_two/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_two/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_two/AGENTS.md"
+printf -- "- [ ] issue-a: first\n- [ ] issue-b: second\n" > "$proj_two/tasks.md"
+git_init "$proj_two"
+rc=0
+out="$(cd "$proj_two" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-two.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "two-issue run failed (rc=$rc): $out"
+echo "$out" | grep -q "^approved: issue-a" || fail "issue-a not approved: $out"
+echo "$out" | grep -q "^approved: issue-b" || fail "issue-b was swallowed by pi's stdin: $out"
+if grep -q '^unknown$' "$TMP/calls-two.log"; then
+  fail "a role received the issue list instead of its prompt: $(cat "$TMP/calls-two.log")"
+fi
+grep -q '^- \[x\] issue-a' "$proj_two/tasks.md" || fail "issue-a not marked done"
+grep -q '^- \[x\] issue-b' "$proj_two/tasks.md" || fail "issue-b not marked done"
 
 echo "smoke OK"

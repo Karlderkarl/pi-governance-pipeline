@@ -90,7 +90,7 @@ It runs a weak model, so keep its job mechanical: deduplicate findings that name
 
 Input: issue, diff, the **original** reviewer JSON objects, the controller's proposal, and the attempt count.
 
-Its task is to decide, and to check the controller's arithmetic rather than trust it. It has three outcomes: `approve`, `reject` with reasons, or `take_over` — a stronger model implements the next attempt fresh from the issue.
+Its task is to decide, and to check the controller's arithmetic rather than trust it. It has three outcomes: `approve`, `reject` with reasons, or `take_over` — the script stashes the rejected working tree and a stronger model implements the next attempt fresh from the issue.
 
 It runs on every attempt, not only on escalation.
 

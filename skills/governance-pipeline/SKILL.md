@@ -21,7 +21,7 @@ Use these instead of writing equivalents from scratch. Paths are relative to thi
 
 | Path | Use |
 |---|---|
-| `assets/auto-develop.sh` | Reference pipeline. Adapt `ISSUE_SOURCE`, `LINT_CMD`, `TEST_CMD`; keep the structure. |
+| `assets/auto-develop.sh` | Reference pipeline. Adapt `ISSUE_SOURCE` (a tasks.md file, or `!command`), `LINT_CMD`, `TEST_CMD`; keep the structure. |
 | `assets/lib/governance.mjs` | Reads and validates the contract block in `AGENTS.md`, resolves a role to a model, owns the state file. Node built-ins only. |
 | `assets/lib/gate.mjs` | Severity-based review gate over the reviewer JSON files. Exit 0 clear, 4 blocked. |
 | `references/*.md` | The contract, file structure, pipeline blueprint, and prompt builders. |
@@ -35,9 +35,9 @@ node .pipeline/lib/governance.mjs config AGENTS.md   # validate before the first
 ./auto-develop.sh --dry-run                          # routing and prompts, zero model calls
 ```
 
-**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
+**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub, including `--auto-merge`). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
 
-The package also ships `pipeline-guard`, an extension that blocks privileged bash commands and unconfirmed governance writes, exposes the `pipeline_state` tool, and adds `/pipeline-status`. It is the interactive counterpart to the script's startup gate — see the package README.
+The package also ships `pipeline-guard`, an extension that blocks privileged bash commands and unconfirmed governance writes, exposes the `pipeline_state` tool, and adds `/pipeline-status`. It is a speed bump, not a sandbox — see the package README. It is the interactive counterpart to the script's startup gate.
 
 ## Choosing a mode
 

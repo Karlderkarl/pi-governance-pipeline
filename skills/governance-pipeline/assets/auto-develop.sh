@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # auto-develop.sh — reference implementation of the governance-driven pipeline.
 #
-# Adapt three things per project: ISSUE_SOURCE, LINT_CMD, TEST_CMD. Everything
-# else is read from governance. Do not hardcode a model here — the mapping in
-# AGENTS.md is what makes routing changeable without touching this file.
-# Keep the script at the repository root: ROOT is the script's own directory.
+# Adapt per project: ISSUE_SOURCE (a tasks.md file, or !command), LINT_CMD,
+# TEST_CMD. Everything else is read from governance. Do not hardcode a model
+# here — the mapping in AGENTS.md is what makes routing changeable without
+# touching this file. Keep the script at the repository root: ROOT is the
+# script's own directory.
 #
 #   ./auto-develop.sh --dry-run
 #   ./auto-develop.sh --issue issue-42
 #   ./auto-develop.sh --unattended --yes
+#   ./auto-develop.sh --auto-merge --yes   # stub — does not merge
 
 set -euo pipefail
 
@@ -21,7 +23,7 @@ AGENTS_FILE="${AGENTS_FILE:-$ROOT/AGENTS.md}"
 SOUL_FILE="${SOUL_FILE:-$ROOT/SOUL.md}"
 MEMORY_FILE="${MEMORY_FILE:-$ROOT/MEMORY.md}"
 
-ISSUE_SOURCE="${ISSUE_SOURCE:-$ROOT/tasks.md}"   # adapt: gh issue list, jira, ...
+ISSUE_SOURCE="${ISSUE_SOURCE:-$ROOT/tasks.md}"   # file of "- [ ] id: ..." lines, or !command printing "id: ..."
 LINT_CMD="${LINT_CMD:-}"                          # adapt: npm run lint, ruff, ...
 TEST_CMD="${TEST_CMD:-}"                          # adapt: npm test, pytest, ...
 # The diff is prompt input — cap it like every other excerpt, or an unignored
@@ -49,13 +51,17 @@ while [[ $# -gt 0 ]]; do
     --dry-run)    DRY_RUN=1 ;;
     --yes|-y)     ASSUME_YES=1 ;;
     --issue)      ONLY_ISSUE="${2:?--issue needs an id}"; shift ;;
-    -h|--help)    sed -n '2,11p' "$SELF"; exit 0 ;;
+    -h|--help)    sed -n '2,13p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
 done
 
 die() { echo "error: $*" >&2; exit 1; }
+
+# The flag is parsed and confirmed at the safety gate so an adapted script can
+# hook a real merge here. The reference implementation does not merge.
+(( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step" >&2
 
 # ---------------------------------------------------------------- safety gate
 # pi has no permission dialog and `pi -p` has no UI. This startup gate is the
@@ -127,11 +133,18 @@ run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-t
     return 0
   fi
 
+  # Prompt-on-argv exceeds macOS ARG_MAX (~256 KB including the environment),
+  # so the body goes in on stdin: pi reads piped stdin as the message verbatim.
+  # @file would also avoid argv, but pi wraps a file in <file name="..."> and
+  # the roles expect their prompt as an instruction, not as an attachment.
+  # The redirect is also what keeps main()'s `done <<< "$issues"` here-string
+  # out of pi's stdin — unredirected, pi would drain the remaining issue lines
+  # into the prompt and the loop would never see them.
   local status=0
   if [[ "$model" == "default" ]]; then
-    pi -p "$(cat "$ppath")" > "$out" || status=$?
+    pi -p < "$ppath" > "$out" || status=$?
   else
-    pi -p --model "$model" "$(cat "$ppath")" > "$out" || status=$?
+    pi -p --model "$model" < "$ppath" > "$out" || status=$?
   fi
   log_event "$root" "$issue" "$role" "$model" "$status" "$ppath"
   return $status
@@ -231,9 +244,39 @@ capture_diff() { # <outfile>
 
 # --------------------------------------------------------------------- issues
 next_issues() {
+  # A leading ! means "run this command"; its stdout is one open issue per
+  # line ("id: title"), the same shape the file form has after stripping the
+  # markdown checkbox. Adapting to gh or Jira is then a one-line assignment,
+  # not a rewrite of this function. eval is intentional and matches LINT_CMD.
+  if [[ "$ISSUE_SOURCE" == !* ]]; then
+    eval "${ISSUE_SOURCE#!}"
+    return 0
+  fi
   [[ -f "$ISSUE_SOURCE" ]] || die "issue source not found: $ISSUE_SOURCE"
   # grep exits 1 when nothing is open; that is a normal result, not an error.
   grep -E '^- \[ \] ' "$ISSUE_SOURCE" | sed -E 's/^- \[ \] //' || true
+}
+
+# Keep tasks.md in step with the state file so a human reading the source
+# does not re-open work the harness already marked done. Command sources
+# (!...) own their own done-state — we do not rewrite their stdout.
+mark_issue_done() {
+  local id="$1"
+  [[ "$ISSUE_SOURCE" == !* ]] && return 0
+  [[ -f "$ISSUE_SOURCE" ]] || return 0
+  node -e '
+    const fs = require("node:fs");
+    const id = process.argv[1], p = process.argv[2];
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp("^(- \\[ \\] )" + esc + "(?=:|\\s|$)");
+    const lines = fs.readFileSync(p, "utf8").split("\n");
+    let n = 0;
+    const out = lines.map((l) => {
+      if (!n && re.test(l)) { n = 1; return l.replace("- [ ] ", "- [x] "); }
+      return l;
+    });
+    fs.writeFileSync(p, out.join("\n"));
+  ' "$id" "$ISSUE_SOURCE"
 }
 
 block_issue() { # <issue_id> <reason> — never silent: MEMORY.md, state, human
@@ -319,6 +362,13 @@ $(cat "$work/exclusions.md")"
       fi
     fi
 
+    # Snapshot HEAD so an implementer that commits (against the prompt) can
+    # be distinguished from one that wrote nothing at all.
+    local head_before=""
+    if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
+      head_before="$(git -C "$ROOT" rev-parse HEAD)"
+    fi
+
     run_role "$root" "$issue_id" "$role" \
       "$(build_implement_prompt "$issue_line" "$work/research.md" "$work/exclusions.md" "$left")" \
       "$work/implement.log" "$att" || true
@@ -348,6 +398,26 @@ $(cat "$work/exclusions.md")"
     fi
 
     capture_diff "$work/diff.patch"
+
+    # Empty diff is fail-closed: "nothing to find" is not "no findings". An
+    # implementer that commits leaves a clean tree, reviewers would rubber-stamp
+    # an empty patch, and the issue would be marked done without a review.
+    if (( ! DRY_RUN )) && [[ ! -s "$work/diff.patch" ]]; then
+      local head_after="" empty_reason
+      if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
+        head_after="$(git -C "$ROOT" rev-parse HEAD)"
+      fi
+      if [[ -n "$head_before" && -n "$head_after" && "$head_before" != "$head_after" ]]; then
+        empty_reason="HEAD moved (${head_before:0:7} -> ${head_after:0:7}). The implementer committed; reviewers only see the working-tree diff. Leave the implementation uncommitted."
+      else
+        empty_reason="The working tree was unchanged. Leave the implementation uncommitted."
+      fi
+      echo "empty diff; retrying implementation" >&2
+      { echo "--- attempt $((ctrl_attempts + master_attempts)) (empty diff) ---"
+        echo "$empty_reason"
+        echo; } >> "$work/exclusions.md"
+      continue
+    fi
 
     # Three reviewers, three processes, in parallel, no shared verdicts.
     # no_self_review: the model that wrote the diff never reviews it. When both
@@ -473,12 +543,30 @@ Emit ONLY this JSON, no prose and no code fence:
     if [[ "$decision" == "approve" && "$gate_status" == "0" ]]; then
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state issue "$PIPELINE_DIR" "$root" "$issue_id" done >/dev/null || true
       echo "approved: $issue_id"
-      (( AUTO_MERGE )) && echo "auto-merge enabled — merge step goes here"
+      mark_issue_done "$issue_id"
+      (( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step"
       return 0
     fi
 
     if [[ "$decision" == "take_over" ]]; then
       echo "master review takes over: implement_master re-implements from the issue, with the findings so far attached" >&2
+      # Controller retries repair in place. take_over promised a fresh start —
+      # stash the rejected tree so the stronger model does not inherit it.
+      # Empty / clean trees make stash exit 1; that is not an error.
+      if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        # stash -u skips ignored files. Pin .pipeline in info/exclude so the
+        # harness state survives even when the project has not gitignored it.
+        # (Passing ':!.pipeline' as a pathspec makes git exit 1 after saving.)
+        local gitdir excl stash_msg
+        gitdir="$(git -C "$ROOT" rev-parse --git-dir)"
+        excl="$gitdir/info/exclude"
+        mkdir -p "$(dirname "$excl")"
+        grep -qxF '.pipeline/' "$excl" 2>/dev/null || printf '%s\n' '.pipeline/' >> "$excl"
+        stash_msg="pipeline: pre-take_over $issue_id-$RUN_ID"
+        git -C "$ROOT" stash push -u -m "$stash_msg" >/dev/null 2>&1 \
+          && echo "stashed working tree as $stash_msg" >&2 \
+          || true
+      fi
       ctrl_attempts=$MAX_CTRL
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state escalate "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null
     fi

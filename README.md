@@ -27,23 +27,26 @@ ticket without a ceiling. This package separates the three concerns:
   of approving.
 - **Budget** — counters and budget live in `.pipeline/state/<root_id>.json`, never in
   a model context. Attempts are a quality signal per issue; the tree budget is a
-  resource limit that never resets.
+  resource limit that never resets. One attempt is six model invocations
+  (implement, three reviewers, controller, master; research is cached per issue),
+  so the default `max_runs_per_tree: 25` is a ceiling of ~150 calls, not a
+  spending cap.
 
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.9
+pi install npm:pi-governance-pipeline@1.0.10
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.9
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.10
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.9
+pi -e npm:pi-governance-pipeline@1.0.10
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.9
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.10
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -83,7 +86,7 @@ skills/governance-pipeline/
   references/governance-files.md
   references/pipeline-template.md
   references/prompt-builders.md  per-role prompts and the reviewer JSON schema
-  assets/auto-develop.sh       reference pipeline (adapt 3 variables)
+  assets/auto-develop.sh       reference pipeline (ISSUE_SOURCE, LINT_CMD, TEST_CMD)
   assets/lib/governance.mjs    contract parser, validator, state store
   assets/lib/gate.mjs          severity gate over reviewer JSON
 extensions/pipeline-guard.ts   privileged-command gate, pipeline_state tool
@@ -128,7 +131,9 @@ for spelling, not for support: pi clamps a level a model does not expose to the
 nearest one it does, silently, and omitting it leaves the choice to pi's own
 settings.
 
-Validation runs at generation time, not at run time, and refuses:
+Validation runs at generation time, and the reference script also runs it at
+startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach
+the loop. It refuses:
 `implement_master` equal to `implement`, reviewers on a single provider, a tree budget
 below the attempt sum, a split depth above 1 without a deliberate override, and an
 unknown `thinking` value. See `references/contract.md`.
@@ -140,19 +145,24 @@ that in two places, not one:
 
 - The generated script confirms `--unattended` and `--auto-merge` **before** the loop
   starts, and refuses a non-interactive stdin unless `--yes` is passed.
-- `pipeline-guard` blocks privileged bash commands and governance rewrites in a
-  session. Without a UI it blocks rather than asks — a privileged step must not
-  proceed just because nobody could answer.
+  `--auto-merge` is a stub in the reference script: the flag is parsed and the
+  gate asks, but nothing is merged — adapt that step in a generated pipeline.
+- `pipeline-guard` is a speed bump against an agent reaching for a destructive
+  command by accident in an interactive session, **not a sandbox**. It pattern-
+  matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
+  constructed commands are not a boundary. Run the pipeline in a container or VM
+  when you need isolation. Without a UI it blocks rather than asks.
 - Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
   the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
-  human already approved. The two halves of the safety rule meet at this variable.
-  It covers privileged commands only — governance writes stay gated even in an
-  unattended run, under their own switch.
+  human already approved — except `sudo`, recursive `rm`, and force-push, which
+  stay armed unless `PIPELINE_ALLOW_DESTRUCTIVE=1`. Governance writes stay gated
+  even in an unattended run, under their own switch.
 
 | Variable | Effect |
 |---|---|
 | `PIPELINE_GUARD=off` | Disables the extension's gating |
-| `PIPELINE_UNATTENDED=1` | Allows privileged commands without a prompt |
+| `PIPELINE_UNATTENDED=1` | Allows privileged commands without a prompt (not sudo / recursive delete / force-push) |
+| `PIPELINE_ALLOW_DESTRUCTIVE=1` | Allows sudo, recursive delete, and force-push in non-interactive runs |
 | `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` | Allows the govern step to write governance non-interactively |
 | `PIPELINE_ALLOW_DEEP_SPLIT=1` | Accepts `max_split_depth > 1` |
 
