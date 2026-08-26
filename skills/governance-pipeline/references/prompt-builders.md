@@ -66,7 +66,7 @@ The gate depends on this being machine-readable. Instruct the reviewer to emit *
 ```
 
 - `verdict`: `approve` | `reject` — advisory only; severity decides
-- `severity`: `critical` | `high` | `medium` | `low`
+- `severity`: `critical` | `high` | `medium` | `low` — anything else (including a trailing space or a synonym like `blocker`) is treated as blocking; the gate does not drop unknown severities
 - `line`: integer or `null` when file-level
 - `findings`: empty array when nothing found
 

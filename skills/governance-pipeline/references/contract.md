@@ -14,13 +14,14 @@ The versioned interface between the two modes. `govern` writes these fields; `au
 ## Reading rules
 
 - All fields live in `AGENTS.md`, in a fenced YAML block.
+- Mark the real block `yaml pipeline-contract`. If several YAML fences contain contract keys, the marked one is used; otherwise the first is used and a warning names how many were found.
 - Every field is optional. Absence is a documented state, never an error.
 - `automate` reads; it must never write to governance. Only `govern` writes.
 - Unknown fields are ignored, not rejected — forward compatibility for v2.
 
 ## models
 
-```yaml
+```yaml pipeline-contract
 models:
   research:          { provider: X, model: mid, thinking: low }
   implement:         { provider: X, model: strong, thinking: high }
@@ -49,7 +50,7 @@ models:
 
 `thinking` is optional per role. Allowed values are pi's thinking levels: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. When set, the pipeline launches that role as `--model provider/model:thinking` (pi's documented shorthand). When omitted, pi resolves the level from its own settings (`defaultThinkingLevel`, and any per-model pinning such as `--models` / `enabledModels` with a `provider/id:level` suffix); governance never sees it. Omitting `thinking` is not the same as writing `off`. The same `provider`/`model` pair may appear on two roles with different `thinking` — YAML role keys stay unique, so you cannot list one role twice. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only. Thinking is a launch parameter, not a different model: `sonnet-4.5` at `high` and `sonnet-4.5` at `low` still collide.
 
-Validation checks the spelling of the level, not whether the model offers it. pi clamps a level a model does not expose to the nearest one it does — a model without reasoning support runs everything at `off`, and `xhigh`/`max` exist only where the model's own level map declares them. The clamp is silent, and the run log records the level that was *requested*. Treat a level as an instruction to pi, not as a guarantee about the model.
+Validation checks the spelling of the level, not whether the model offers it. pi clamps a level a model does not expose to the next **higher** supported level, and only falls back to a lower one when none exists above — so `thinking: low` on a model that only exposes `off` and `high` runs at `high`, not `off`. A model without reasoning support runs everything at `off`. `xhigh`/`max` exist only where the model's own level map declares them. The clamp is silent, and the run log records the level that was *requested*. Treat a level as an instruction to pi, not as a guarantee about the model.
 
 ## budgets
 
@@ -79,6 +80,8 @@ review:
 
 Any finding at a blocking severity rejects the attempt. Findings at follow-up severities become tickets and do not block. There is no vote count and no percentage — see the reviewer schema in `prompt-builders.md`.
 
+Severity is normalised with trim + lower-case before comparison. A finding whose normalised severity is not `critical`, `high`, `medium`, or `low` is treated as **blocking** (fail-closed) and listed under `unknown_severity` in the gate JSON — reviewers are language models, and a trailing space or a synonym like `blocker` must not clear the gate.
+
 Both lists must be flow-style arrays of known severities (`critical`, `high`, `medium`, `low`), e.g. `[critical, high]`. A YAML block sequence (`- critical`) is a contract error: the subset parser would otherwise treat it as an empty map and crash later.
 
 ## Absent-field behaviour
@@ -89,7 +92,7 @@ Both lists must be flow-style arrays of known severities (`critical`, `high`, `m
 | a single role under `models:` | That role falls back to the default model |
 | `thinking` on a role | pi resolves the level from its own settings; governance never sees it |
 | `thinking` without `model` | Warning; thinking is ignored — the role runs the default model at pi's own level |
-| a level the model does not expose | pi clamps to the nearest supported level, silently; the log still shows the requested one |
+| a level the model does not expose | pi clamps to the next higher supported level (falling back downward only when none exists above), silently; the log still shows the requested one |
 | `review:` sub-map under `models:` | All three reviewers use the default model; `no_self_review` still applies |
 | `constraints.no_self_review` | Treated as `true` |
 | whole `budgets:` block | Defaults above apply |
@@ -110,6 +113,6 @@ A pipeline generated from governance with none of these blocks must be functiona
 - a `thinking` value that is not one of pi's levels
 - `review.blocking_severities` or `review.followup_severities` that is not an array of known severities, or a YAML block sequence
 
-Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach the loop even if generation was skipped. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
+Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2) **and** on every `state` command, so an invalid contract cannot reach the loop or freeze a garbage budget into a state file. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
 
-Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model — `no_self_review` would leave fewer than two reviewers on that path, and the runtime gate blocks below that floor instead of approving.
+Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model. That last case is recoverable only by escalating: `no_self_review` leaves fewer than two reviewers on that path, so the runtime gate blocks **every** attempt on it and the matching attempt budget is spent with no chance of approval.

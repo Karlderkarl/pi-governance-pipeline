@@ -26,9 +26,39 @@ bash -n "$SH" || fail "auto-develop.sh has a syntax error"
 node --check "$LIB/governance.mjs" || fail "governance.mjs has a syntax error"
 node --check "$LIB/gate.mjs" || fail "gate.mjs has a syntax error"
 
-# The extension ships as raw TypeScript. Catch a type error before the registry.
-npx --yes --package typescript@5.8.3 tsc --noEmit -p "$ROOT/tests/tsconfig.guard.json" \
-  || fail "pipeline-guard.ts failed tsc --noEmit"
+# The extension ships as raw TypeScript. Prefer the real SDK types so a missing
+# powershell overload cannot hide; fall back to tests/shims if npm cannot install.
+guard_types="$TMP/guard-types"
+mkdir -p "$guard_types"
+if npm install --prefix "$guard_types" --no-save --no-fund --no-audit \
+     @earendil-works/pi-coding-agent typebox >/dev/null 2>&1; then
+  node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const root = process.argv[1], tmp = process.argv[2];
+    const posix = (p) => p.replace(/\\/g, "/");
+    fs.writeFileSync(path.join(tmp, "tsconfig.json"), JSON.stringify({
+      compilerOptions: {
+        target: "ES2022", module: "ESNext", moduleResolution: "bundler",
+        strict: true, noEmit: true, skipLibCheck: true, types: [],
+        paths: {
+          "@earendil-works/pi-coding-agent": [posix(path.join(tmp, "node_modules/@earendil-works/pi-coding-agent"))],
+          "typebox": [posix(path.join(tmp, "node_modules/typebox"))]
+        }
+      },
+      files: [
+        posix(path.join(root, "extensions/pipeline-guard.ts")),
+        posix(path.join(root, "tests/shims/node.d.ts"))
+      ]
+    }, null, 2));
+  ' "$ROOT" "$guard_types"
+  npx --yes --package typescript@5.8.3 tsc --noEmit -p "$guard_types/tsconfig.json" \
+    || fail "pipeline-guard.ts failed tsc --noEmit against the real SDK"
+else
+  echo "smoke: real SDK types unavailable; falling back to tests/shims" >&2
+  npx --yes --package typescript@5.8.3 tsc --noEmit -p "$ROOT/tests/tsconfig.guard.json" \
+    || fail "pipeline-guard.ts failed tsc --noEmit"
+fi
 
 # README install examples must track package.json (release checklist).
 ver="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version)' "$ROOT/package.json")"
@@ -64,6 +94,42 @@ node "$LIB/governance.mjs" config "$TMP/AGENTS.md" >/dev/null || fail "valid con
   || fail "model resolution wrong"
 node "$LIB/governance.mjs" models "$TMP/AGENTS.md" | grep -q '"review.security":"google/r1"' \
   || fail "models map wrong"
+
+# Marked fence wins over an earlier example block.
+cat > "$TMP/two-blocks.md" <<'MD'
+# A
+```yaml
+models:
+  implement: { provider: a, model: example }
+```
+```yaml pipeline-contract
+models:
+  implement:         { provider: anthropic, model: impl }
+  implement_master:  { provider: google,    model: master-impl }
+  review:
+    security:        { provider: google,    model: r1 }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: r3 }
+```
+MD
+[[ "$(node "$LIB/governance.mjs" model "$TMP/two-blocks.md" implement)" == "anthropic/impl" ]] \
+  || fail "yaml pipeline-contract fence did not win over the example block"
+# Two unmarked candidates: first wins, warning names the count.
+cat > "$TMP/two-unmarked.md" <<'MD'
+# A
+```yaml
+budgets:
+  max_runs_per_tree: 25
+```
+```yaml
+budgets:
+  max_runs_per_tree: 40
+```
+MD
+node "$LIB/governance.mjs" config "$TMP/two-unmarked.md" 2>"$TMP/two-unmarked.err" >/dev/null \
+  || fail "two unmarked contract blocks should still parse"
+grep -q "2 YAML blocks" "$TMP/two-unmarked.err" \
+  || fail "multiple unmarked contract blocks produced no warning"
 
 # thinking: optional per role, launched as provider/model:level
 cat > "$TMP/think.md" <<'MD'
@@ -182,6 +248,16 @@ grep -q '"severity": "critical"' "$TMP/gate-sev.json" || fail "dedup dropped the
 rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 "$TMP/r-crit.json" "$TMP/r-low.json" >/dev/null || rc=$?
 [[ $rc -eq 4 ]] || fail "critical-then-low must block (got $rc)"
 
+# Unrecognised / untrimmed severity is fail-closed, not dropped.
+echo '{"role":"security","verdict":"approve","findings":[{"severity":"blocker","file":"x.ts","line":1,"title":"RCE via eval of user input"}]}' > "$TMP/r-blocker.json"
+echo '{"role":"quality","verdict":"approve","findings":[{"severity":"CRITICAL ","file":"y.ts","line":2,"title":"hardcoded key"}]}' > "$TMP/r-trim.json"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 "$TMP/r-blocker.json" "$TMP/r-trim.json" > "$TMP/gate-unk.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "unknown/untrimmed severity must block (got $rc)"
+grep -q '"verdict": "blocked"' "$TMP/gate-unk.json" || fail "unknown severity verdict must be blocked"
+grep -q '"blocker"' "$TMP/gate-unk.json" || fail "blocker finding missing from gate output"
+grep -q 'CRITICAL' "$TMP/gate-unk.json" || fail "trimmed CRITICAL finding missing from gate output"
+grep -q '"unknown_severity"' "$TMP/gate-unk.json" || fail "unknown_severity array missing"
+
 # ---------------------------------------------------------------- state store
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state init "$TMP/proj" issue-1 >/dev/null
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state attempt "$TMP/proj" issue-1 issue-1 controller >/dev/null
@@ -200,13 +276,21 @@ GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state init "$TMP/p
 
 # Frozen tree budget: a later AGENTS.md edit must not change an existing tree;
 # --set is the supported way to raise the ceiling.
-printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: 5\n```\n' > "$TMP/custom.md"
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: 9\n```\n' > "$TMP/custom.md"
 GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state init "$TMP/proj2" issue-9 \
   | grep -q '"max_runs_per_tree": 7' || fail "state init overwrote a frozen tree budget"
 GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state budget "$TMP/proj2" issue-9 --set 11 \
   | grep -q '"max_runs_per_tree": 11' || fail "state budget --set did not raise the ceiling"
 rc=0; GOVERNANCE_AGENTS="$TMP/custom.md" node "$LIB/governance.mjs" state budget "$TMP/proj2" issue-9 --set 0 >/dev/null 2>&1 || rc=$?
 [[ "$rc" -ne 0 ]] || fail "state budget --set 0 was accepted"
+
+# Issue #13: state must refuse a non-integer budget, same as config.
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: twenty\n```\n' > "$TMP/twenty.md"
+rc=0; GOVERNANCE_AGENTS="$TMP/twenty.md" node "$LIB/governance.mjs" state init "$TMP/proj-twenty" root1 >/dev/null 2>&1 || rc=$?
+[[ "$rc" -eq 2 ]] || fail "state init accepted max_runs_per_tree: twenty (got $rc)"
+# Missing AGENTS.md still degrades to defaults, it does not fail.
+GOVERNANCE_AGENTS="$TMP/no-such-agents.md" node "$LIB/governance.mjs" state init "$TMP/proj-missing" root1 >/dev/null \
+  || fail "state init with missing AGENTS.md must degrade to defaults"
 
 # ---------------------------------------------------------------- auto-develop.sh
 proj="$TMP/run"; mkdir -p "$proj/.pipeline/lib"
@@ -380,6 +464,42 @@ grep -q "diff truncated at 1024 bytes" "$proj5/.pipeline/work/issue-5/diff.patch
   || fail "oversized diff not truncated: $(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch") bytes"
 [[ "$(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch")" -lt 2048 ]] \
   || fail "truncated diff still too large"
+
+# ---------------------------------------------------------------- reviewers cap
+# Truncation must read from a file: dd count=1 on a pipe short-reads ~64 KiB.
+proj_rev="$TMP/run-revcap"; mkdir -p "$proj_rev/.pipeline/lib"
+cp "$SH" "$proj_rev/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_rev/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_rev/AGENTS.md"
+printf -- "- [ ] issue-rev: fat reviewers\n" > "$proj_rev/tasks.md"
+git_init "$proj_rev"
+stub_rev="$TMP/stub-rev"; mkdir -p "$stub_rev"
+cat > "$stub_rev/pi" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only:"*)
+    node -e 'const pad="x".repeat(90000); console.log(JSON.stringify({role:"security",verdict:"approve",findings:[{severity:"low",file:"f",line:1,title:"t",rationale:pad,suggestion:"s"}]}))' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_rev/pi"
+rc=0
+out="$(cd "$proj_rev" && PATH="$stub_rev:$PATH" REVIEWERS_MAX_BYTES=131072 bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "reviewer-cap run failed (rc=$rc): $out"
+[[ -f "$proj_rev/.pipeline/work/issue-rev/reviewers.trunc" ]] \
+  || fail "reviewer JSON was not truncated at 131072"
+trunc_bytes="$(wc -c < "$proj_rev/.pipeline/work/issue-rev/reviewers.trunc")"
+[[ "$trunc_bytes" -gt 131000 ]] || fail "REVIEWERS_MAX_BYTES=131072 short-read (got $trunc_bytes bytes)"
+[[ "$trunc_bytes" -lt 132000 ]] || fail "truncated reviewer JSON still too large: $trunc_bytes"
+grep -q "reviewer JSON truncated at 131072 bytes" "$proj_rev/.pipeline/work/issue-rev/reviewers.trunc" \
+  || fail "truncation notice missing"
 
 # ---------------------------------------------------------------- gate floor
 # One surviving reviewer is not a panel: below --min-reviewers the gate blocks

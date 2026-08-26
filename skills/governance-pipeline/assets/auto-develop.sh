@@ -148,14 +148,14 @@ run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-t
   # out of pi's stdin — unredirected, pi would drain the remaining issue lines
   # into the prompt and the loop would never see them.
   local status=0
-  # --approve: non-interactive `pi -p` never shows the project-trust prompt.
-  # Without a saved /trust decision, defaultProjectTrust=ask ignores project
-  # extensions — including a project-local pipeline-guard. The human already
-  # started this pipeline in the project; load those resources.
+  # --approve trusts every project-local resource, not just pipeline-guard.
+  # Only pass it after the startup gate has run (PIPELINE_UNATTENDED=1).
+  local pi_args=(-p)
+  [[ "${PIPELINE_UNATTENDED:-}" == 1 ]] && pi_args+=(--approve)
   if [[ "$model" == "default" ]]; then
-    pi -p --approve < "$ppath" > "$out" || status=$?
+    pi "${pi_args[@]}" < "$ppath" > "$out" || status=$?
   else
-    pi -p --approve --model "$model" < "$ppath" > "$out" || status=$?
+    pi "${pi_args[@]}" --model "$model" < "$ppath" > "$out" || status=$?
   fi
   log_event "$root" "$issue" "$role" "$model" "$status" "$ppath"
   return $status
@@ -303,16 +303,19 @@ mark_issue_done() {
   ' "$id" "$ISSUE_SOURCE"
 }
 
-block_issue() { # <issue_id> <reason> — never silent: MEMORY.md, state, human
+block_issue() { # <root_id> <issue_id> <reason> — never silent: MEMORY.md, state, human
+  # The first argument is the tree root. Passing the issue id twice would, on a
+  # split, create a new state file with its own budget instead of marking the
+  # sub-issue in the parent tree.
   GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" \
-    state issue "$PIPELINE_DIR" "$1" "$1" blocked >/dev/null || true
+    state issue "$PIPELINE_DIR" "$1" "$2" blocked >/dev/null || true
   {
     echo ""
-    echo "## Blocker — $1 ($(date +%Y-%m-%d))"
+    echo "## Blocker — $2 ($(date +%Y-%m-%d))"
     echo ""
-    echo "$2"
+    echo "$3"
   } >> "$MEMORY_FILE"
-  echo "blocked: $1 — written to $MEMORY_FILE" >&2
+  echo "blocked: $2 — written to $MEMORY_FILE" >&2
 }
 
 # ----------------------------------------------------------------------- loop
@@ -367,7 +370,7 @@ $(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
       node "$LIB/governance.mjs" state budget "$PIPELINE_DIR" "$root" >/dev/null || budget_rc=$?
       case "$budget_rc" in
         0) ;;
-        3) block_issue "$issue_id" "Tree budget exhausted after $ctrl_attempts controller and $master_attempts master attempts."
+        3) block_issue "$root" "$issue_id" "Tree budget exhausted after $ctrl_attempts controller and $master_attempts master attempts."
            FAILED_ISSUES+=("$issue_id"); return 0 ;;
         *) echo "state store error: budget check exited $budget_rc" >&2
            FAILED_ISSUES+=("$issue_id"); return 0 ;;
@@ -381,7 +384,7 @@ $(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
     if (( ctrl_attempts >= MAX_CTRL )); then
       role="implement_master"; left=$(( MAX_MASTER - master_attempts ))
       if (( master_attempts >= MAX_MASTER )); then
-        block_issue "$issue_id" "Rejected at master review $master_attempts times. Unresolved findings:
+        block_issue "$root" "$issue_id" "Rejected at master review $master_attempts times. Unresolved findings:
 $(cat "$work/exclusions.md")"
         FAILED_ISSUES+=("$issue_id")
         return 0
@@ -505,16 +508,19 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
         --min-reviewers "$MIN_REVIEWERS" "${ran[@]}" > "$work/gate.json" || gate_status=$?
       # gate.mjs marks a missing reviewer file unavailable and carries on; the
       # prompt assembly must not abort the whole run on that same event.
-      reviewers_json="$(cat "${ran[@]}" 2>/dev/null || true)"
-      if (( $(printf '%s' "$reviewers_json" | wc -c) > REVIEWERS_MAX_BYTES )); then
-        printf '%s' "$reviewers_json" | dd bs="$REVIEWERS_MAX_BYTES" count=1 2>/dev/null > "$work/reviewers.trunc"
+      cat "${ran[@]}" > "$work/reviewers.json" 2>/dev/null || true
+      reviewers_json="$(cat "$work/reviewers.json" 2>/dev/null || true)"
+      if (( $(wc -c < "$work/reviewers.json") > REVIEWERS_MAX_BYTES )); then
+        # File, not pipe: dd count=1 on a pipe short-reads at the pipe buffer
+        # (~64 KiB), so a larger REVIEWERS_MAX_BYTES would not take effect.
+        dd if="$work/reviewers.json" of="$work/reviewers.trunc" bs="$REVIEWERS_MAX_BYTES" count=1 2>/dev/null
         printf '\n[reviewer JSON truncated at %s bytes; full files are in %s]\n' "$REVIEWERS_MAX_BYTES" "$work" >> "$work/reviewers.trunc"
         reviewers_json="$(cat "$work/reviewers.trunc")"
       fi
     else
       # Every reviewer was dropped this attempt (e.g. all equal
       # implement_master). Gating on nothing is not a gate: fail closed.
-      printf '%s\n' '{"verdict":"blocked","reviewers_used":0,"reviewers_unavailable":["all dropped by no_self_review"],"min_reviewers":'"$MIN_REVIEWERS"',"blocking":[],"followups":[]}' \
+      printf '%s\n' '{"verdict":"blocked","reviewers_used":0,"reviewers_unavailable":["all dropped by no_self_review"],"min_reviewers":'"$MIN_REVIEWERS"',"blocking":[],"followups":[],"unknown_severity":[]}' \
         > "$work/gate.json"
       gate_status=4
       reviewers_json="(no reviewer output: every reviewer was dropped by no_self_review in this attempt)"

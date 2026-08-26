@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.10
+pi install npm:pi-governance-pipeline@1.0.11
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.10
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.11
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.10
+pi -e npm:pi-governance-pipeline@1.0.11
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.10
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.11
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -56,7 +56,9 @@ Install **user-scoped** (the default). A project-local install (`-l`) loads `pip
 the pipeline's child `pi -p` processes only after a saved trust decision (`/trust`) or `--approve`.
 Without either, `defaultProjectTrust` (default `ask`) ignores project extensions in non-interactive
 modes, and nothing in the output says the guard is absent. The reference script passes `--approve`
-to those children so a project-local guard still loads once you have started the pipeline.
+to those children **only after** the startup safety gate (`--unattended` / `--auto-merge`). That
+flag trusts *all* project-local resources (`.pi/settings.json`, extensions, skills, prompts,
+`SYSTEM.md` / `APPEND_SYSTEM.md`), not only the guard. A plain `./auto-develop.sh` does not pass it.
 
 The contract in `AGENTS.md` carries its own version (`contract v1`), independent of the package
 version. A package release that changes what a contract field means bumps both.
@@ -134,8 +136,9 @@ review:
 may appear on two roles with different thinking; identity for `no_self_review` and
 for `implement` vs `implement_master` still ignores the level. The level is checked
 for spelling, not for support: pi clamps a level a model does not expose to the
-nearest one it does, silently, and omitting it leaves the choice to pi's own
-settings.
+next higher supported level (falling back downward only when none exists above),
+silently, and omitting it leaves the choice to pi's own settings. `thinking: low`
+on a model that only exposes `off` and `high` therefore runs at `high`.
 
 Validation runs at generation time, and the reference script also runs it at
 startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach
@@ -157,10 +160,11 @@ that in two places, not one:
   command by accident in an interactive session, **not a sandbox**. It pattern-
   matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
   constructed commands are not a boundary. The governance-write gate covers the
-  `write` and `edit` tools plus obvious bash write paths (`sed -i`, `tee`,
-  redirections, `mv`/`cp`/`rm`) that name a governance file — not every way to
-  rewrite `AGENTS.md`. `--exclude-tools bash` or a container is the only real
-  boundary. Run the pipeline in a container or VM when you need isolation.
+  `write` and `edit` tools plus obvious bash and PowerShell write paths (`sed -i`,
+  `tee`, `Set-Content`, redirections, `mv`/`cp`/`rm`) that name a governance file —
+  not every way to rewrite `AGENTS.md`. `--exclude-tools bash,powershell` or a
+  container is the only real boundary. Run the pipeline in a container or VM when
+  you need isolation.
   Without a UI it blocks rather than asks.
 - Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
   the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
@@ -182,7 +186,7 @@ rarely need changing:
 | Variable | Default | Effect |
 |---|---|---|
 | `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; larger diffs are truncated and say so |
-| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and say so |
+| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and says so |
 | `EXCLUSIONS_MAX_LINES` | `200` | Cap on prior findings re-entering the implement prompt; the newest blocks survive, the oldest are omitted |
 | `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving |
 

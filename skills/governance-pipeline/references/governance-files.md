@@ -26,7 +26,7 @@ Agent behaviour, and the only file the pipeline reads for configuration. pi load
 
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable config block**.
 
-The config block holds `models:`, `budgets:`, and `review:` exactly as specified in `contract.md`. Keep it in one fenced YAML block so it can be extracted without parsing prose around it.
+The config block holds `models:`, `budgets:`, and `review:` exactly as specified in `contract.md`. Fence it as `yaml pipeline-contract` so an example block above it cannot become the routing. Keep it in one fenced YAML block so it can be extracted without parsing prose around it.
 
 Prohibited actions deserve care: they are the last line of defence in a harness without permission prompts. Be specific — "never force-push to main", not "be careful with git".
 

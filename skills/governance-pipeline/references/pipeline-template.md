@@ -2,7 +2,7 @@
 
 Structural blueprint for the generated `auto-develop.sh`. Stack-agnostic: the gates are read from governance, never hardcoded.
 
-> **Scope of the bundled reference** (`assets/auto-develop.sh`): it implements this blueprint except the split branch (it blocks instead) and the commit/PR/governance-update step (a marked stub). Both are deliberate adaptation points. A generator that implements splitting must honor `max_split_depth`.
+> **Scope of the bundled reference** (`assets/auto-develop.sh`): it implements this blueprint except the split branch (it blocks instead) and the commit/PR/governance-update step (a marked stub). Both are deliberate adaptation points. A generator that implements splitting must honor `max_split_depth`, and must pass the **tree root id** (not the sub-issue id) into `block_issue` / `state issue` so a blocked child does not create a new state file with its own budget.
 
 ## Contents
 
@@ -98,7 +98,7 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 3. Counters are read from and written to the state file only.
 4. The budget check precedes every attempt.
 5. Deterministic gates run before any model-based review.
-6. The master review runs on every attempt.
+6. The master review runs on every attempt. The master cannot approve over a blocking gate.
 7. Abort writes to `MEMORY.md` before exiting.
 8. Without `--unattended`, no privileged step proceeds unconfirmed.
 9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.

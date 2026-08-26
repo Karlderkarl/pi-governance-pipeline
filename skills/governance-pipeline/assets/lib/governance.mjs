@@ -143,16 +143,32 @@ function splitTopLevel(text) {
 
 /* ------------------------------------------------------------ config layer */
 
-// The config block is the first fenced yaml block in AGENTS.md that declares
-// any contract top-level key. Prose around it is ignored by construction.
+// Prefer a fence marked `yaml pipeline-contract`. Otherwise the first fenced
+// yaml block that declares a contract key wins — an example block above the
+// real one would silently become routing.
 export function readConfig(agentsPath) {
 	const warnings = [];
 	if (!existsSync(agentsPath)) {
 		return { config: withDefaults({}), warnings: [`${agentsPath} not found; every role runs the default model`] };
 	}
 	const text = readFileSync(agentsPath, "utf8");
-	const blocks = [...text.matchAll(/```ya?ml\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
-	const block = blocks.find((b) => /^\s*(models|budgets|review)\s*:/m.test(b));
+	const fences = [...text.matchAll(/```(ya?ml)([^\n]*)\n([\s\S]*?)```/g)].map((m) => ({
+		info: m[2].trim(),
+		body: m[3],
+	}));
+	const candidates = fences.filter((f) => /^\s*(models|budgets|review)\s*:/m.test(f.body));
+	const marked = candidates.filter((f) => /\bpipeline-contract\b/.test(f.info));
+	let block = null;
+	if (marked.length > 0) {
+		block = marked[0].body;
+	} else if (candidates.length > 0) {
+		block = candidates[0].body;
+		if (candidates.length > 1) {
+			warnings.push(
+				`AGENTS.md has ${candidates.length} YAML blocks with contract keys; using the first. Mark the real one as \`yaml pipeline-contract\``,
+			);
+		}
+	}
 	if (!block) {
 		warnings.push("no contract config block in AGENTS.md; defaults apply to every field");
 		return { config: withDefaults({}), warnings };
@@ -323,7 +339,7 @@ export function validate(config) {
 			const collisions = REVIEWERS.filter((r) => modelRef(m.review?.[r]) === implModel).length;
 			if (collisions > REVIEWERS.length - 2) {
 				warnings.push(
-					`AGENTS.md: ${collisions} of ${REVIEWERS.length} reviewers equal models.${label} (${implModel}); no_self_review leaves fewer than two reviewers on that path, where the runtime gate blocks instead of approving`,
+					`AGENTS.md: ${collisions} of ${REVIEWERS.length} reviewers equal models.${label} (${implModel}); no_self_review leaves fewer than two reviewers on that path, so the runtime gate blocks every ${label} attempt instead of approving — that path's attempt budget is spent with no chance of approval`,
 				);
 			}
 		}
@@ -457,6 +473,15 @@ function usage() {
 	process.exit(1);
 }
 
+function emitValidation(config) {
+	const { errors, warnings } = validate(config);
+	for (const w of warnings) process.stderr.write(`contract warning: ${w}\n`);
+	if (errors.length > 0) {
+		for (const e of errors) process.stderr.write(`contract error: ${e}\n`);
+		process.exit(2);
+	}
+}
+
 function main(argv) {
 	const [command, ...args] = argv;
 	if (!command) usage();
@@ -481,18 +506,14 @@ function main(argv) {
 			process.stdout.write(`${resolveModel(config, rolePath)}\n`);
 			return;
 		}
-		const { errors, warnings: contractWarnings } = validate(config);
-		for (const w of contractWarnings) process.stderr.write(`contract warning: ${w}\n`);
-		if (errors.length > 0) {
-			for (const e of errors) process.stderr.write(`contract error: ${e}\n`);
-			process.exit(2);
-		}
+		emitValidation(config);
 		process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
 		return;
 	}
 	if (command === "state") {
 		const { config, warnings } = readConfig(process.env.GOVERNANCE_AGENTS ?? "AGENTS.md");
 		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
+		emitValidation(config);
 		const result = stateCommand(args, config);
 		if (result) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		return;

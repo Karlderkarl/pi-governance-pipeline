@@ -26,7 +26,7 @@ Use these instead of writing equivalents from scratch. Paths are relative to thi
 | `assets/lib/gate.mjs` | Severity-based review gate over the reviewer JSON files. Exit 0 clear, 4 blocked. |
 | `references/*.md` | The contract, file structure, pipeline blueprint, and prompt builders. |
 
-Install the libraries next to the generated script:
+Install the libraries next to the generated script. `<skill>` is the directory that contains this `SKILL.md` — pi prints that path when it loads the skill; otherwise locate `SKILL.md` under the installed package.
 
 ```bash
 mkdir -p .pipeline/lib && cp <skill>/assets/lib/*.mjs .pipeline/lib/
@@ -100,7 +100,7 @@ These hold in every generated pipeline. If a requested change would break one, s
 
 **Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` become follow-up tickets. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
 
-**The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary.
+**The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary. The master cannot approve over a blocking gate: a deterministic severity fail outranks the model verdict.
 
 **Safe by default.** Privileged execution and auto-merge stay off unless `--unattended` / `--auto-merge` are passed. pi has no permission prompts, so the confirmation must happen in the script *before* the loop starts, or the run must be containerized. An extension cannot ask under `pi -p` — `ctx.hasUI` is false there. Never rely on a runtime dialog in an unattended run.
 
@@ -121,7 +121,7 @@ Invoke a role like this, reading `MODEL` from the mapping:
 pi -p --model "$MODEL" "$(build_prompt review security "$ISSUE" "$DIFF")"
 ```
 
-`$MODEL` is `provider/id`, or `provider/id:thinking` when the role sets `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). That is pi's `--model` shorthand; the separate `--thinking <level>` flag does the same job and wins when both are given, so pass one or the other, never both. pi clamps a level the model does not expose to the nearest one it does, and says nothing — the level is an instruction, not a guarantee. The same model may be mapped to two roles with different thinking. Identity for `no_self_review` and for `implement` vs `implement_master` still ignores thinking — a different effort level is not a different model.
+`$MODEL` is `provider/id`, or `provider/id:thinking` when the role sets `thinking` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`). That is pi's `--model` shorthand; the separate `--thinking <level>` flag does the same job and wins when both are given, so pass one or the other, never both. pi clamps a level the model does not expose to the next higher supported level (and only falls back to a lower one when none exists above), and says nothing — the level is an instruction, not a guarantee. A cheap `thinking: low` can therefore run at `high` or `max`. The same model may be mapped to two roles with different thinking. Identity for `no_self_review` and for `implement` vs `implement_master` still ignores thinking — a different effort level is not a different model.
 
 Verify the exact flag names against `pi --help` for the installed version before generating the script, and use the JSON event stream mode when the caller needs to parse structured output rather than prose.
 

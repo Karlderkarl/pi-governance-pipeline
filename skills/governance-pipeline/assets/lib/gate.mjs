@@ -21,8 +21,8 @@ let checkOnly = false;
 const files = [];
 
 for (let i = 0; i < argv.length; i++) {
-	if (argv[i] === "--blocking") blocking = argv[++i].split(",").map((s) => s.trim());
-	else if (argv[i] === "--followup") followup = argv[++i].split(",").map((s) => s.trim());
+	if (argv[i] === "--blocking") blocking = argv[++i].split(",").map((s) => s.trim().toLowerCase());
+	else if (argv[i] === "--followup") followup = argv[++i].split(",").map((s) => s.trim().toLowerCase());
 	else if (argv[i] === "--min-reviewers") minReviewers = Number(argv[++i]);
 	else if (argv[i] === "--check") checkOnly = true;
 	else files.push(argv[i]);
@@ -63,8 +63,11 @@ if (checkOnly) {
 	process.exit(ok ? 0 : 1);
 }
 
+const KNOWN_SEVERITY = new Set(["critical", "high", "medium", "low"]);
 const RANK = { critical: 3, high: 2, medium: 1, low: 0 };
-const rank = (f) => RANK[String(f.severity).toLowerCase()] ?? -1;
+const severityOf = (f) => String(f.severity ?? "").trim().toLowerCase();
+// Unknown ranks above critical so a synonym cannot lose to a later "low".
+const rank = (f) => (KNOWN_SEVERITY.has(severityOf(f)) ? RANK[severityOf(f)] : 4);
 
 const unavailable = [];
 const findings = [];
@@ -99,8 +102,13 @@ for (const file of files) {
 	}
 }
 
-const blockingFindings = findings.filter((f) => blocking.includes(String(f.severity).toLowerCase()));
-const followupFindings = findings.filter((f) => followup.includes(String(f.severity).toLowerCase()));
+const unknownFindings = findings.filter((f) => !KNOWN_SEVERITY.has(severityOf(f)));
+const blockingFindings = findings.filter(
+	(f) => blocking.includes(severityOf(f)) || !KNOWN_SEVERITY.has(severityOf(f)),
+);
+const followupFindings = findings.filter(
+	(f) => KNOWN_SEVERITY.has(severityOf(f)) && followup.includes(severityOf(f)),
+);
 
 const result = {
 	// Every reviewer unreadable — or a panel below the floor — is reported as
@@ -112,6 +120,13 @@ const result = {
 	min_reviewers: minReviewers,
 	blocking: blockingFindings,
 	followups: followupFindings,
+	unknown_severity: unknownFindings.map((f) => ({
+		file: f.file ?? "-",
+		line: f.line ?? "-",
+		title: f.title ?? "",
+		severity: f.severity,
+		role: f.role,
+	})),
 };
 
 process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);

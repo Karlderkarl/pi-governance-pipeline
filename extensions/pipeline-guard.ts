@@ -18,10 +18,10 @@
  * This is a speed bump, not a sandbox. Patterns match the command string the
  * agent typed, not a security boundary: `rm -rf "$HOME"`, `eval`, `bash -c`,
  * and runtime-constructed commands slip through. The governance gate covers
- * the `write` and `edit` tools, plus obvious bash write paths (`sed -i`,
- * `tee`, redirections, `mv`/`cp`/`rm`) that name a governance file. It is not
- * a sandbox; `--exclude-tools bash` or a container is the only real boundary.
- * Run the pipeline in a container or VM when you need isolation.
+ * the `write` and `edit` tools, plus obvious bash/PowerShell write paths that
+ * name a governance file. It is not a sandbox; `--exclude-tools bash,powershell`
+ * or a container is the only real boundary. Run the pipeline in a container or
+ * VM when you need isolation.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -34,7 +34,9 @@ import { Type } from "typebox";
 const DESTRUCTIVE: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bgit\s+push\b[^\n]*\s(--force|-f)\b/, reason: "force-push" },
 	{ pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\b/, reason: "recursive delete" },
+	{ pattern: /\bRemove-Item\b[^\n]*\s-(Recurse|r)\b/i, reason: "recursive delete" },
 	{ pattern: /\bsudo\b/, reason: "privilege escalation" },
+	{ pattern: /\bStart-Process\b[^\n]*\s-Verb\s+RunAs\b/i, reason: "privilege escalation" },
 ];
 
 const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
@@ -54,12 +56,13 @@ function governanceFileIn(text: string): string | undefined {
 	});
 }
 
-function bashWritesGovernance(command: string): string | undefined {
+function shellWritesGovernance(command: string): string | undefined {
 	const name = governanceFileIn(command);
 	if (!name) return;
 	const writey =
 		/(^|[\s;|&])(tee|sed\s+-i)\b/.test(command) ||
 		/(^|[\s;|&])(mv|cp|rm)\b/.test(command) ||
+		/(^|[\s;|&])(Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Remove-Item)\b/i.test(command) ||
 		/>>?/.test(command);
 	return writey ? name : undefined;
 }
@@ -103,7 +106,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
 		if (!enabled) return;
 
-		if (isToolCallEventType("bash", event)) {
+		if (isToolCallEventType("bash", event) || isToolCallEventType("powershell", event)) {
 			const command = event.input.command ?? "";
 			const destructive = DESTRUCTIVE.find((entry) => entry.pattern.test(command));
 			if (destructive && process.env.PIPELINE_ALLOW_DESTRUCTIVE !== "1") {
@@ -120,7 +123,7 @@ export default function (pi: ExtensionAPI) {
 				if (!ok) return { block: true, reason: `pipeline-guard: ${destructive.reason} declined by the user` };
 				return;
 			}
-			const gov = bashWritesGovernance(command);
+			const gov = shellWritesGovernance(command);
 			if (gov) {
 				if (!ctx.hasUI) {
 					if (process.env.PIPELINE_ALLOW_GOVERNANCE_WRITE !== "1") {
@@ -130,7 +133,7 @@ export default function (pi: ExtensionAPI) {
 						};
 					}
 				} else {
-					const ok = await ctx.ui.confirm("Governance write", `Modify ${gov} via bash?\n\n${command}`);
+					const ok = await ctx.ui.confirm("Governance write", `Modify ${gov} via a shell command?\n\n${command}`);
 					if (!ok) return { block: true, reason: `pipeline-guard: ${gov} write declined` };
 				}
 			}
