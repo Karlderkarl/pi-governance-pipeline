@@ -7,6 +7,7 @@ Closes the fail-open empty-diff path, feeds prompts on stdin so macOS ARG_MAX ca
 - `mark_issue_done` matches the raw id from `tasks.md` (`feat/login-page`), not the sanitised directory token (`feat-login-page`).
 - The script refuses to start outside a git repository, instead of burning the tree budget on empty diffs and then blocking a correct implementation.
 - Isolated `tsc --noEmit` on `pipeline-guard.ts` no longer depends on a global `@types/node` (the release runner has none).
+- `take_over` no longer lets `git stash -u` swallow an untracked `MEMORY.md`. The file is copied out and written back so a later `block_issue` still appends to the existing history.
 - Prompts are fed to `pi -p` on stdin instead of interpolating the body onto argv, so a master prompt that concatenates the diff plus every reviewer JSON no longer dies with `argument list too long` on macOS.
 - The same redirect keeps the issue-list here-string that drives the main loop out of `pi`'s stdin. Unredirected, `pi` drained it, prepended the remaining issues to the running prompt, and the loop never saw them: a multi-issue run silently processed only the first.
 - `take_over` stashes the rejected working tree (`pipeline: pre-take_over …`) before `implement_master` runs. Controller retries still repair in place; only escalation resets.

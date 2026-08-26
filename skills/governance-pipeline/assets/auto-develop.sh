@@ -582,9 +582,15 @@ Emit ONLY this JSON, no prose and no code fence:
         mkdir -p "$(dirname "$excl")"
         grep -qxF '.pipeline/' "$excl" 2>/dev/null || printf '%s\n' '.pipeline/' >> "$excl"
         stash_msg="pipeline: pre-take_over $issue_id-$RUN_ID"
+        # stash -u takes untracked MEMORY.md with it. Do not add MEMORY.md to
+        # info/exclude — that would ignore it in the user's repo. Copy out and
+        # write back so a later block_issue still appends to the existing history.
+        local gov_bak="$work/MEMORY.md.pre-stash"
+        [[ -f "$MEMORY_FILE" ]] && cp "$MEMORY_FILE" "$gov_bak"
         git -C "$ROOT" stash push -u -m "$stash_msg" >/dev/null 2>&1 \
           && echo "stashed working tree as $stash_msg" >&2 \
           || true
+        [[ -f "$gov_bak" ]] && cp "$gov_bak" "$MEMORY_FILE"
       fi
       ctrl_attempts=$MAX_CTRL
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state escalate "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null

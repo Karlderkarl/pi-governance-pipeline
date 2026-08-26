@@ -102,4 +102,5 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.
 10. `--dry-run` writes no state and consumes no budget.
 11. An empty working-tree diff is a rejected attempt, not a clean review.
-12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach.
+12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach. `MEMORY.md` is copied out and written back — stash `-u` would otherwise swallow the blocker history.
+13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `CLAUDE.md`). An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.

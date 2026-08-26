@@ -560,6 +560,8 @@ cp "$SH" "$proj_to/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_to/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj_to/AGENTS.md"
 printf -- "- [ ] issue-to: take over\n" > "$proj_to/tasks.md"
 git_init "$proj_to"
+# Untracked on purpose: stash -u would swallow it without the restore.
+printf '## existing blocker\nkeep me\n' > "$proj_to/MEMORY.md"
 stub_to="$TMP/stub-to"; mkdir -p "$stub_to"
 cat > "$stub_to/pi" <<'EOF'
 #!/usr/bin/env bash
@@ -591,6 +593,8 @@ echo "$out" | grep -q "stashed working tree" || fail "take_over did not stash: $
 git -C "$proj_to" stash list | grep -q "pipeline: pre-take_over issue-to-" \
   || fail "stash missing: $(git -C "$proj_to" stash list)"
 echo "$out" | grep -q "^approved: issue-to" || fail "take_over path did not approve: $out"
+[[ -f "$proj_to/MEMORY.md" ]] || fail "take_over stash swallowed MEMORY.md"
+grep -q "keep me" "$proj_to/MEMORY.md" || fail "MEMORY.md content lost after take_over stash"
 
 # ---------------------------------------------------------------- ISSUE_SOURCE=!command and --auto-merge notice
 proj_cmd="$TMP/run-cmd"; mkdir -p "$proj_cmd/.pipeline/lib"
