@@ -1,0 +1,25 @@
+# Runs the asset suite on every change to main and on every PR.
+# Release publishing stays in release.yml — this workflow must not
+# publish, mint an OIDC token, or write to the repo.
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Smoke test pipeline assets
+        run: bash tests/smoke.sh

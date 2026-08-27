@@ -4,14 +4,21 @@
 // percentage collapses into unanimity and hides that it did.
 //
 //   node gate.mjs --blocking critical,high [--followup medium,low] [--min-reviewers N] r1.json r2.json r3.json
-//   node gate.mjs --check r1.json   -> exit 0 = parseable reviewer JSON, 1 = not
+//   node gate.mjs --check r1.json   -> exit 0 = usable verdict, 2 = findings without
+//                                      a valid verdict word, 1 = nothing usable
 //
 // stdout: merged JSON. Exit 0 = clear, 4 = blocked, 1 = usage error.
+// --check also uses 2 (see above); 2 is not a gate verdict.
 // --min-reviewers (default 1): a panel shrunk below the floor — reviewers
 // dropped by no_self_review or lost to unparseable output — blocks instead of
 // approving. One opinion is not a review panel.
 
 import { readFileSync } from "node:fs";
+
+// Known before argv so a typo in --blocking/--followup cannot empty the
+// panel by silently dropping every finding of an unrecognised severity.
+const KNOWN_SEVERITY = new Set(["critical", "high", "medium", "low"]);
+const RANK = { critical: 3, high: 2, medium: 1, low: 0 };
 
 const argv = process.argv.slice(2);
 let blocking = ["critical", "high"];
@@ -20,26 +27,53 @@ let minReviewers = 1;
 let checkOnly = false;
 const files = [];
 
-for (let i = 0; i < argv.length; i++) {
-	if (argv[i] === "--blocking") blocking = argv[++i].split(",").map((s) => s.trim().toLowerCase());
-	else if (argv[i] === "--followup") followup = argv[++i].split(",").map((s) => s.trim().toLowerCase());
-	else if (argv[i] === "--min-reviewers") minReviewers = Number(argv[++i]);
-	else if (argv[i] === "--check") checkOnly = true;
-	else files.push(argv[i]);
-}
-if (!Number.isInteger(minReviewers) || minReviewers < 1) minReviewers = 1;
-if (files.length === 0 || (checkOnly && files.length !== 1)) {
+function usage(message) {
+	if (message) process.stderr.write(`error: ${message}\n`);
 	process.stderr.write(
 		"usage: gate.mjs [--blocking a,b] [--followup c,d] [--min-reviewers n] <reviewer.json>...\n       gate.mjs --check <reviewer.json>\n",
 	);
 	process.exit(1);
 }
 
-// Reviewers sometimes wrap the object in prose or fences despite instructions.
-// Recover the object; never regex prose into a verdict.
-function extractJson(text) {
-	const fenced = text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
-	const candidate = fenced ? fenced[1] : text;
+function parseSeverityList(flag, raw) {
+	if (raw == null) usage(`${flag} needs a comma-separated list`);
+	const list = [];
+	for (const token of String(raw).split(",")) {
+		const item = token.trim().toLowerCase();
+		if (!KNOWN_SEVERITY.has(item)) {
+			usage(`${flag} contains unknown severity (${token.trim() || token}); expected critical, high, medium, low`);
+		}
+		list.push(item);
+	}
+	return list;
+}
+
+for (let i = 0; i < argv.length; i++) {
+	if (argv[i] === "--blocking") blocking = parseSeverityList("--blocking", argv[++i]);
+	else if (argv[i] === "--followup") followup = parseSeverityList("--followup", argv[++i]);
+	else if (argv[i] === "--min-reviewers") {
+		const raw = argv[++i];
+		minReviewers = Number(raw);
+		// A typo must not quietly lower the floor to 1 — that would approve
+		// a panel the caller thought was still gated.
+		if (!Number.isInteger(minReviewers) || minReviewers < 1) {
+			usage(`--min-reviewers must be an integer >= 1 (got ${raw})`);
+		}
+	} else if (argv[i] === "--check") checkOnly = true;
+	else if (argv[i].startsWith("--")) usage(`unknown flag: ${argv[i]}`);
+	else files.push(argv[i]);
+}
+if (files.length === 0 || (checkOnly && files.length !== 1)) usage();
+
+// Reviewers wrap the object in prose or fences despite instructions. Recover
+// findings; never regex prose into a verdict. Two stages, because they catch
+// different mistakes: the prompt shows `"verdict":"approve|reject"` inline,
+// so an echo is recognised by the pipe in that word, not by failing the
+// approve|reject check — that check is only whether the reviewer gets a retry.
+// Severity decides the gate; a schemakonform critical with verdict "blocked"
+// must still block. Last match wins: the real object is written after the
+// example, never before.
+function tryParseObject(candidate) {
 	const start = candidate.indexOf("{");
 	const end = candidate.lastIndexOf("}");
 	if (start === -1 || end <= start) return null;
@@ -50,21 +84,45 @@ function extractJson(text) {
 	}
 }
 
-// --check mode: is this one file a parseable reviewer object? The pipeline
-// uses it to decide whether a reviewer gets its single retry.
-if (checkOnly) {
-	let ok = false;
-	try {
-		const parsed = extractJson(readFileSync(files[0], "utf8"));
-		ok = !!parsed && Array.isArray(parsed.findings);
-	} catch {
-		ok = false;
-	}
-	process.exit(ok ? 0 : 1);
+const isEcho = (o) => String(o?.verdict ?? "").includes("|");
+
+function isVerdict(o) {
+	return (
+		!!o &&
+		Array.isArray(o.findings) &&
+		["approve", "reject"].includes(String(o.verdict ?? "").trim().toLowerCase())
+	);
 }
 
-const KNOWN_SEVERITY = new Set(["critical", "high", "medium", "low"]);
-const RANK = { critical: 3, high: 2, medium: 1, low: 0 };
+function extractJson(text) {
+	const candidates = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
+	candidates.push(text);
+	let verdict = null;
+	let shaped = null;
+	for (const candidate of candidates) {
+		const parsed = tryParseObject(candidate);
+		if (!parsed || isEcho(parsed)) continue;
+		if (isVerdict(parsed)) verdict = parsed;
+		else if (Array.isArray(parsed.findings)) shaped = parsed;
+	}
+	return verdict ?? shaped;
+}
+
+// --check ranks the file so the pipeline retry cannot overwrite a usable
+// original with worse output. 0 = stage-1 verdict (retry not needed),
+// 2 = findings without a valid word (retry, but keep this if the retry is worse),
+// 1 = nothing the gate can use.
+if (checkOnly) {
+	let parsed = null;
+	try {
+		parsed = extractJson(readFileSync(files[0], "utf8"));
+	} catch {
+		parsed = null;
+	}
+	if (isVerdict(parsed)) process.exit(0);
+	process.exit(parsed && Array.isArray(parsed.findings) ? 2 : 1);
+}
+
 const severityOf = (f) => String(f.severity ?? "").trim().toLowerCase();
 // Unknown ranks above critical so a synonym cannot lose to a later "low".
 const rank = (f) => (KNOWN_SEVERITY.has(severityOf(f)) ? RANK[severityOf(f)] : 4);
@@ -80,6 +138,8 @@ for (const file of files) {
 	} catch (error) {
 		parsed = null;
 	}
+	// extractJson already requires a findings array; keep the check so a
+	// future edit cannot count a parsed non-reviewer as a panel member.
 	if (!parsed || !Array.isArray(parsed.findings)) {
 		unavailable.push(file);
 		continue;

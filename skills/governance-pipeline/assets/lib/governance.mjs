@@ -149,7 +149,14 @@ function splitTopLevel(text) {
 export function readConfig(agentsPath) {
 	const warnings = [];
 	if (!existsSync(agentsPath)) {
-		return { config: withDefaults({}), warnings: [`${agentsPath} not found; every role runs the default model`] };
+		return {
+			config: withDefaults({}),
+			warnings: [
+				`${agentsPath} not found; every role runs the default model — no_self_review cannot fire, so three reviewers are one model`,
+			],
+			hadModelsBlock: false,
+			noSelfReviewExplicit: false,
+		};
 	}
 	const text = readFileSync(agentsPath, "utf8");
 	const fences = [...text.matchAll(/```(ya?ml)([^\n]*)\n([\s\S]*?)```/g)].map((m) => ({
@@ -170,12 +177,27 @@ export function readConfig(agentsPath) {
 		}
 	}
 	if (!block) {
-		warnings.push("no contract config block in AGENTS.md; defaults apply to every field");
-		return { config: withDefaults({}), warnings };
+		warnings.push(
+			"no contract config block in AGENTS.md; defaults apply to every field — no_self_review cannot fire, so three reviewers are one model",
+		);
+		return { config: withDefaults({}), warnings, hadModelsBlock: false, noSelfReviewExplicit: false };
 	}
 	const parsed = parseYamlSubset(block);
-	if (!parsed.models) warnings.push("no `models:` block; every role runs the default model");
-	return { config: withDefaults(parsed), warnings };
+	const noSelfReviewExplicit = parsed.models?.constraints?.no_self_review === true;
+	// Defaulted no_self_review still degrades here (compat). The concrete
+	// effect: implement and all three reviewers share the session default,
+	// and a default/default collision cannot be proven at run time.
+	if (!parsed.models) {
+		warnings.push(
+			"no `models:` block; every role runs the default model — no_self_review cannot fire, so three reviewers are one model",
+		);
+	}
+	return {
+		config: withDefaults(parsed),
+		warnings,
+		hadModelsBlock: Boolean(parsed.models),
+		noSelfReviewExplicit,
+	};
 }
 
 function withDefaults(parsed) {
@@ -239,7 +261,7 @@ function eachMappedRole(models, fn) {
 
 // Generation-time validation. Runtime is too late: a correlated reviewer set
 // only shows up as bad reviews, never as an error.
-export function validate(config) {
+export function validate(config, source = {}) {
 	const errors = [];
 	const warnings = [];
 	const m = config.models ?? {};
@@ -248,9 +270,21 @@ export function validate(config) {
 	if (impl && master && impl === master) {
 		errors.push(`AGENTS.md models.implement_master (${master}) equals models.implement; escalation would change nothing`);
 	}
-	const providers = new Set(
-		REVIEWERS.map((r) => m.review?.[r]?.provider).filter((p) => typeof p === "string" && p !== ""),
-	);
+	const providers = new Set();
+	for (const r of REVIEWERS) {
+		const entry = m.review?.[r];
+		if (!entry || typeof entry !== "object" || !entry.model) continue;
+		const provider = entry.provider;
+		if (typeof provider !== "string" || provider === "") {
+			// Without a provider the diversity set and no_self_review identity
+			// are both guessing. Name the role so the operator can fill it in.
+			errors.push(
+				`AGENTS.md models.review.${r} has a model but no provider; reviewers must name a provider so diversity and no_self_review can compare them`,
+			);
+			continue;
+		}
+		providers.add(provider);
+	}
 	if (providers.size === 1) {
 		errors.push(`AGENTS.md models.review.* uses a single provider (${[...providers][0]}); reviewers must span at least two`);
 	}
@@ -313,7 +347,39 @@ export function validate(config) {
 			`AGENTS.md models.master_review (${masterReview}) equals models.implement_master; the escalated model would review its own work`,
 		);
 	}
+	// A models: block that only carries constraints is not a routing map:
+	// every role still runs the default, and the operator asked for a map.
+	if (source.hadModelsBlock) {
+		let mapped = 0;
+		eachMappedRole(m, () => {
+			mapped++;
+		});
+		if (mapped === 0) {
+			warnings.push(
+				"AGENTS.md has a `models:` block but no role is mapped; every role runs the default model — a constraints-only block is not a routing map",
+			);
+		}
+	}
 	const noSelfReview = m.constraints?.no_self_review ?? true;
+	const mappedReviewers = REVIEWERS.filter((r) => modelRef(m.review?.[r]));
+	// An unmapped review role runs pi's default model, and so does an unmapped
+	// implement role. no_self_review compares refs; two unset roles never
+	// collide, and a mapped implement never equals the string "default" either.
+	// With fewer than two mapped reviewers the gate may approve a self-review.
+	// Written down, that is a guarantee this config cannot honour (error).
+	// Defaulted, it is the documented preference (warning). Absence is never
+	// an error — that is the backward-compat path.
+	if (noSelfReview && mappedReviewers.length < 2) {
+		const message =
+			`AGENTS.md maps ${mappedReviewers.length} of ${REVIEWERS.length} models.review.* roles; the rest run the default model, as does an unmapped models.implement. no_self_review cannot drop a reviewer it cannot tell apart from the implementer, so the gate may approve a diff that reviewed itself. Map at least two models.review.* roles.`;
+		if (source.noSelfReviewExplicit === true) {
+			errors.push(
+				`${message} \`no_self_review\` is set explicitly in this file, so this is an error rather than a warning.`,
+			);
+		} else {
+			warnings.push(message);
+		}
+	}
 	if (noSelfReview) {
 		for (const r of REVIEWERS) {
 			const reviewer = modelRef(m.review?.[r]);
@@ -473,8 +539,8 @@ function usage() {
 	process.exit(1);
 }
 
-function emitValidation(config) {
-	const { errors, warnings } = validate(config);
+function emitValidation(config, source = {}) {
+	const { errors, warnings } = validate(config, source);
 	for (const w of warnings) process.stderr.write(`contract warning: ${w}\n`);
 	if (errors.length > 0) {
 		for (const e of errors) process.stderr.write(`contract error: ${e}\n`);
@@ -499,21 +565,23 @@ function main(argv) {
 	if (command === "config" || command === "model") {
 		const [agentsPath, rolePath] = args;
 		if (!agentsPath) usage();
-		const { config, warnings } = readConfig(agentsPath);
+		const { config, warnings, hadModelsBlock, noSelfReviewExplicit } = readConfig(agentsPath);
 		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
 		if (command === "model") {
 			if (!rolePath) usage();
 			process.stdout.write(`${resolveModel(config, rolePath)}\n`);
 			return;
 		}
-		emitValidation(config);
+		emitValidation(config, { hadModelsBlock, noSelfReviewExplicit });
 		process.stdout.write(`${JSON.stringify(config, null, 2)}\n`);
 		return;
 	}
 	if (command === "state") {
-		const { config, warnings } = readConfig(process.env.GOVERNANCE_AGENTS ?? "AGENTS.md");
+		const { config, warnings, hadModelsBlock, noSelfReviewExplicit } = readConfig(
+			process.env.GOVERNANCE_AGENTS ?? "AGENTS.md",
+		);
 		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
-		emitValidation(config);
+		emitValidation(config, { hadModelsBlock, noSelfReviewExplicit });
 		const result = stateCommand(args, config);
 		if (result) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		return;

@@ -65,7 +65,7 @@ The gate depends on this being machine-readable. Instruct the reviewer to emit *
 }
 ```
 
-- `verdict`: `approve` | `reject` — advisory only; severity decides
+- `verdict`: `approve` | `reject` — advisory only; severity decides the gate. The word does decide whether the reviewer gets its one retry (`--check` requires `approve` or `reject`); after that retry, findings still reach the gate even if the word is wrong
 - `severity`: `critical` | `high` | `medium` | `low` — anything else (including a trailing space or a synonym like `blocker`) is treated as blocking; the gate does not drop unknown severities
 - `line`: integer or `null` when file-level
 - `findings`: empty array when nothing found

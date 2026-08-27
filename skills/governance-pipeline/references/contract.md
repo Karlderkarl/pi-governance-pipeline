@@ -44,7 +44,7 @@ models:
 | `controller` | Aggregates reviewer JSON, proposes a verdict | Weak model is fine; it does not decide |
 | `master_review` | Final decision | Runs on every attempt; should differ from `implement_master` — the escalated model must not review its own work |
 | `review.*` | Independent reviewers | Span ≥2 providers |
-| `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced at run time. A collision where both sides resolve to `default` cannot be detected — map at least the implement roles |
+| `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced at run time, over `provider/model` refs. Two roles that are both unmapped resolve to the same default model, but neither carries a ref to compare, so the drop cannot fire on that pair — map at least two `review.*` roles, not just the implement roles |
 
 `provider` and `model` are opaque strings passed through to the model flag. This skill does not validate them against a catalogue; an unknown model surfaces as a launch failure with the offending role named.
 
@@ -93,26 +93,31 @@ Both lists must be flow-style arrays of known severities (`critical`, `high`, `m
 | `thinking` on a role | pi resolves the level from its own settings; governance never sees it |
 | `thinking` without `model` | Warning; thinking is ignored — the role runs the default model at pi's own level |
 | a level the model does not expose | pi clamps to the next higher supported level (falling back downward only when none exists above), silently; the log still shows the requested one |
-| `review:` sub-map under `models:` | All three reviewers use the default model; `no_self_review` still applies |
+| `review:` sub-map under `models:` | All three reviewers use the default model. `no_self_review` cannot fire against an unmapped `implement` (no refs to compare) and does not fire against a mapped one (`default` never equals `provider/model`), so the panel may be the implementer reviewing itself. Warning at generation time; error if `no_self_review` is written down explicitly |
 | `constraints.no_self_review` | Treated as `true` |
 | whole `budgets:` block | Defaults above apply |
 | a single budget field | That field's default applies |
 | `review:` gating block | Defaults above apply |
 
-A pipeline generated from governance with none of these blocks must be functionally identical to a pre-contract pipeline. This is the backward-compatibility test.
+A pipeline generated from governance with none of these blocks must be functionally identical to a pre-contract pipeline. This is the backward-compatibility test, and it is why an absent `models.review` is a warning rather than an error: absence is a documented state (see [Reading rules](#reading-rules)), so it degrades loudly instead of refusing to run.
+
+The one thing absence cannot do is buy a guarantee. `no_self_review` written into the file *is* a guarantee, and a configuration that cannot honour it is a contract error — not because the field is present, but because what it promises is not deliverable there. Absence keeps the default and gets a warning naming the consequence; presence gets an error. Both paths refuse to claim independence the panel does not have.
 
 ## Validation
 
 `automate` validates at generation time and fails loudly on:
 
 - `implement_master` identical to `implement` — escalation would be pointless (compared without `thinking`)
-- fewer than two distinct providers across `review.*` — correlated reviewers
+- exactly one provider across mapped `review.*` roles — correlated reviewers. A mapped `review.*` role without `provider:` is also an error (the role is named): diversity and `no_self_review` cannot compare a model that has no provider. Zero mapped reviewers stay a warning, not this error
 - `max_runs_per_tree` lower than `max_attempts_controller + max_attempts_master` — no issue could ever finish
 - a budget field that is not an integer in range (`max_attempts_*` and `max_runs_per_tree` ≥ 1, `max_split_depth` ≥ 0)
-- `max_split_depth` above 1 without an explicit override in the PRD
+- `max_split_depth` above 1 without `PIPELINE_ALLOW_DEEP_SPLIT=1` (an env override, not a PRD field — generators that only read this contract would otherwise have no way to honour it)
 - a `thinking` value that is not one of pi's levels
 - `review.blocking_severities` or `review.followup_severities` that is not an array of known severities, or a YAML block sequence
+- an explicit `constraints.no_self_review` with fewer than two mapped `review.*` roles — the field promises independence the panel cannot deliver
 
 Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2) **and** on every `state` command, so an invalid contract cannot reach the loop or freeze a garbage budget into a state file. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
 
 Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model. That last case is recoverable only by escalating: `no_self_review` leaves fewer than two reviewers on that path, so the runtime gate blocks **every** attempt on it and the matching attempt budget is spent with no chance of approval.
+
+Fewer than two mapped `review.*` roles under a defaulted `no_self_review` is the remaining warning. The generated script also reports it per issue — on stderr once, and in the run log as `independence-unverified` — and states it in the master's prompt, so the deciding role never reads three reviewer files as three independent opinions when they may be one.

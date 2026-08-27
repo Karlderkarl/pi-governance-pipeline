@@ -1,28 +1,24 @@
-Closes fail-open unknown severities, validates the contract on the state path, stops passing `--approve` without the startup gate, and stops the skill from teaching generators the bugs the script already fixed.
+Closes fail-open review-gate flags and unmapped self-review, keeps a written finding through a worse retry, and runs the smoke suite on every PR.
 
 ### Fixed
-- The review gate no longer drops an unrecognised or untrimmed severity. `"blocker"` and `"CRITICAL "` block (exit 4) and are listed under `unknown_severity`.
-- `state init` / `state budget` run the same contract validator as `config`, so `max_runs_per_tree: twenty` exits 2 instead of freezing a string into the tree and reporting budget exhausted at attempt 0.
-- Child `pi -p` processes receive `--approve` only after `--unattended` / `--auto-merge` have passed the startup gate. A plain `./auto-develop.sh` no longer trusts the whole `.pi/` directory.
-- `REVIEWERS_MAX_BYTES` above ~64 KiB now takes effect: truncation reads from a file, matching `capture_diff`. `dd count=1` on a pipe was short-reading at the pipe buffer.
-- `pipeline-guard` applies the same destructive, privileged, and governance-write checks to the `powershell` tool as to `bash`.
-- `block_issue` takes the tree root id separately from the issue id, so a generator that splits cannot create a new budget by blocking a child.
-- Thinking-level docs match pi 0.84.3: an unsupported level clamps **up** to the next higher supported level, not to the nearest.
-- The skill's invoke example no longer puts the prompt on argv (the ARG_MAX path the reference script already left). Prompts go in on stdin; `--approve` only after the startup gate.
-- The skill no longer claims pi has no sub-agents. Reviewers stay separate `pi -p` processes on purpose — sharing a session would undo independent review.
-- The skill no longer promises that `medium`/`low` become tickets. The bundled script records them as gate follow-ups and feeds them back on retry; opening tickets is a generator adaptation point.
-- `/pipeline-audit` checks the invariants the 1.0.10–1.0.11 fixes actually added (stdin prompts, empty diff, `take_over` stash, unknown severity, `--approve` gating, `block_issue` root id).
-- Lint/test retries are documented as consuming an implementation attempt and tree budget, even though they skip the review cycle.
-- Unattended `/govern` is told to set `PIPELINE_ALLOW_GOVERNANCE_WRITE=1`; `pipeline-guard` otherwise blocks the `SYSTEM.md` / `.pi/APPEND_SYSTEM.md` writes the skill requires.
+- `gate.mjs --min-reviewers zwei` (or `0`) is a usage error (exit 1) that names the value. It no longer clamps the floor to 1.
+- `gate.mjs --blocking` / `--followup` refuse unknown severities instead of dropping them from the lists.
+- Unknown `gate.mjs` flags (`--min-reviewrs`) are a usage error, not phantom reviewer files that leave `--min-reviewers` at 1.
+- `extractJson` tries every fenced block, then the raw text. A schema echo (`"verdict":"approve|reject"`) is recognised by the pipe in that word, not by failing `approve|reject`. The last real object wins. Severity decides the gate: a schemakonform `critical` with verdict `"blocked"` still blocks. `--check` is 0 (usable verdict), 2 (findings, wrong word), or 1 (nothing) so the pipeline retry still fires on a wrong word.
+- A reviewer retry writes a sidecar and is taken only when `--check` ranks it better (0 > 2 > 1). A prose retry can no longer erase a `critical` that was already on disk.
+- The master-decision parser uses the same last-valid-candidate rule (`approve|reject|take_over`). An example fence before `approve` no longer burns the attempt as a silent `reject`.
+- `MIN_REVIEWERS` that is not an integer ≥ 1 is fatal rather than reset. The check runs after flag parsing so `--help` still prints.
+- Explicit `constraints.no_self_review: true` with fewer than two mapped `review.*` roles is a contract error. The defaulted-true path still parses, but warns whenever fewer than two reviewers are mapped — including when `implement` itself is mapped (`"default"` never equals `provider/model`).
+- An unmapped review panel is reported at run time (stderr once per issue, `independence-unverified` in the log, a `Panel independence:` line in the master prompt). `no_self_review: false` no longer claims every reviewer ran on a mapped model. A constraints-only `models:` block warns that no role is mapped.
+- A mapped `review.*` role without `provider:` is a contract error. Exactly one provider across mapped reviewers is still an error; zero mapped reviewers stay a warning.
+- A real run without `pi` dies at start instead of burning the tree budget. `--dry-run` without `pi` notes the gap and still exits 0.
+- `contract.md` no longer claims `no_self_review` still applies when the `review:` sub-map is absent. The split-depth override is named `PIPELINE_ALLOW_DEEP_SPLIT=1`.
+- The skill documents `PIPELINE_ALLOW_DESTRUCTIVE`, `MIN_REVIEWERS`, `PIPELINE_ALLOW_DEEP_SPLIT`, that `ISSUE_SOURCE=!command` / `LINT_CMD` / `TEST_CMD` are `eval`, and that attended child `pi -p` processes load `SYSTEM.md` via `.pi/APPEND_SYSTEM.md` only with a saved project-trust decision. It no longer claims pi has built-in sub-agents. The quickstart creates `tasks.md` and says dry-run does not confirm a real run.
 
 ### Added
-- Prefer a fenced block marked `yaml pipeline-contract` when more than one YAML block in `AGENTS.md` contains contract keys.
-- `state` commands now emit contract warnings on stderr the same way `config` does.
-- The release workflow accepts `workflow_dispatch` with a required `tag` input, so a tag that never started the job can still be published. The job checks that tag out and still requires it to match `package.json`.
+- `.github/workflows/ci.yml` runs `bash tests/smoke.sh` on push to `main` and on pull requests (Node 22, `contents: read`). Publish stays on the tag workflow.
 
 ### Changed
-- README Safety: `--exclude-tools bash,powershell` (excluding `bash` alone does not close the PowerShell path). `--approve` is documented as trusting every project-local resource, not only the guard.
-- Skill description no longer auto-loads on a bare mention of `AGENTS.md`. Copy-and-adapt points (`ISSUE_SOURCE`, `LINT_CMD`, `TEST_CMD`) are named; the loop is not a free rewrite.
-- Research notes are documented as cached per issue until the work file is deleted.
+- README install pins, validation list, Safety, `MIN_REVIEWERS`, and the release section track 1.0.12.
 
-**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.10...v1.0.11
+**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.11...v1.0.12

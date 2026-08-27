@@ -1,7 +1,7 @@
 ---
 name: governance-pipeline
 description: Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, and hard run budgets. Use when the user wants to generate or audit governance from a PRD, or to generate, re-sync, or audit an auto-develop pipeline with multi-model review. Do not load merely because a repository contains AGENTS.md.
-compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md.
+compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md. Child `pi -p` processes load project-trusted resources (SYSTEM.md via `.pi/APPEND_SYSTEM.md`) only with a saved trust decision or `--approve` (the latter only after `--unattended`).
 ---
 
 # Governance Pipeline
@@ -32,12 +32,30 @@ Install the libraries next to the generated script. `<skill>` is the directory t
 mkdir -p .pipeline/lib && cp <skill>/assets/lib/*.mjs .pipeline/lib/
 cp <skill>/assets/auto-develop.sh . && chmod +x auto-develop.sh
 node .pipeline/lib/governance.mjs config AGENTS.md   # validate before the first run
-./auto-develop.sh --dry-run                          # routing and prompts, zero model calls
+printf -- '- [ ] issue-1: first task\n' > tasks.md     # dry-run reads this; without it it dies
+./auto-develop.sh --dry-run                          # routing and prompts, zero model calls; notes if pi is missing
 ```
 
 **Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub, including `--auto-merge`). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
 
 The package also ships `pipeline-guard`, an extension that blocks privileged bash commands and unconfirmed governance writes, exposes the `pipeline_state` tool, and adds `/pipeline-status`. It is a speed bump, not a sandbox — see the package README. It is the interactive counterpart to the script's startup gate.
+
+## Safety
+
+`pipeline-guard` does not see the script's own environment. Whoever sets that environment has code execution, and attended runs can miss governance the operator thinks is loaded.
+
+| Variable | Why it exists |
+|---|---|
+| `PIPELINE_ALLOW_DESTRUCTIVE=1` | Unlocks `sudo`, recursive `rm`, and force-push that stay blocked even after `--unattended` |
+| `PIPELINE_LIB` | Override the copied `gate.mjs` / `governance.mjs` directory |
+| `MIN_REVIEWERS` | Floor of parseable reviewers; below it the gate blocks. Not a performance cap |
+| `PIPELINE_ALLOW_DEEP_SPLIT` | Accepts `max_split_depth > 1`; without it that budget is a contract error |
+| `GOVERNANCE_AGENTS` / `AGENTS_FILE` | Contract file for `state` commands vs the script |
+| `REVIEWERS_MAX_BYTES` | Cap on concatenated reviewer JSON in controller/master prompts |
+
+**`eval` is the issue source.** `ISSUE_SOURCE=!command`, `LINT_CMD`, and `TEST_CMD` run through `eval` and are all env-overridable. That is deliberate (one-line adaptation to `gh` or Jira) — it also means the run's environment is a shell, with or without `pipeline-guard`.
+
+**Project trust.** `--approve` is passed to child `pi -p` processes only after `--unattended` / `--auto-merge` export `PIPELINE_UNATTENDED=1`. Without it, pi loads trust-gated project resources only if the operator already trusted the project interactively. `AGENTS.md` still loads (context files are trust-independent); `SYSTEM.md` via `.pi/APPEND_SYSTEM.md` does not. An attended run can therefore implement against `AGENTS.md` while silently missing the rest of governance.
 
 ## Choosing a mode
 
@@ -90,7 +108,7 @@ research ─▶ implement/TDD ─▶ deterministic gates (lint, tests) ─▶ 3 
 
 These hold in every generated pipeline. If a requested change would break one, stop and say so.
 
-**Each step is a separate `pi -p` process.** pi has sub-agents; do not use them for this pipeline. Reviewers must not share a session or see each other's verdicts — that is why each role is its own process, not a child of the implementer.
+**Each step is a separate `pi -p` process.** If an extension provides sub-agents, do not use them for this pipeline. Reviewers must not share a session or see each other's verdicts — that is why each role is its own process, not a child of the implementer.
 
 **The script picks the model, not the agent.** Read the mapping from `AGENTS.md`; never let a prompt choose its own model.
 
@@ -112,7 +130,7 @@ The mapping lives in `AGENTS.md` under `models:`; the field reference is in `ref
 
 Two constraints the generated script must enforce:
 
-- **No self-review.** A model that implemented a diff must not review it. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel. The bundled script passes `MIN_REVIEWERS` (default 2). `gate.mjs` itself defaults `--min-reviewers` to 1 so a direct caller is unchanged.
+- **No self-review.** A model that implemented a diff must not review it. This is enforced over `provider/model` refs, so it only holds for roles that are actually mapped: two unmapped roles both run pi's default model, and neither carries a ref to compare. Map at least two `review.*` roles — with fewer, the panel may be the implementer reviewing its own diff and the gate would approve it. `governance.mjs` warns about that at generation time and errors when `no_self_review` is written into `AGENTS.md` explicitly. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel. The bundled script passes `MIN_REVIEWERS` (default 2). `gate.mjs` itself defaults `--min-reviewers` to 1 so a direct caller is unchanged.
 - **Provider diversity.** Reviewers should span at least two providers. Three prompts against one model share its blind spots, which defeats the purpose of reviewing three times.
 
 Invoke a role like this, reading `MODEL` from the mapping. Feed the prompt on stdin — interpolating it onto argv exceeds macOS `ARG_MAX` once the master sees the diff plus every reviewer JSON. Pass `--approve` only after the startup gate has set `PIPELINE_UNATTENDED=1`; it trusts every project-local resource, not only the guard.

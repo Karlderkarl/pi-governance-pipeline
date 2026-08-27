@@ -42,7 +42,6 @@ EXCLUSIONS_MAX_LINES="${EXCLUSIONS_MAX_LINES:-200}"
 # unparseable output can shrink the panel at run time. Below this floor no
 # independent check is left, and the gate must block instead of approving.
 MIN_REVIEWERS="${MIN_REVIEWERS:-2}"
-[[ "$MIN_REVIEWERS" =~ ^[0-9]+$ ]] || MIN_REVIEWERS=2
 
 UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""
 FAILED_ISSUES=()
@@ -61,6 +60,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 die() { echo "error: $*" >&2; exit 1; }
+# After flags so --help still prints. Unlike the byte caps above, a bad value
+# here is fatal rather than reset: those are performance knobs, this is the
+# floor of the review panel. `^[0-9]+$` let a 0 through, which gate.mjs then
+# refused while the gate JSON still logged the 0.
+[[ "$MIN_REVIEWERS" =~ ^[1-9][0-9]*$ ]] || die "MIN_REVIEWERS must be an integer >= 1; got '$MIN_REVIEWERS'"
 
 # The flag is parsed and confirmed at the safety gate so an adapted script can
 # hook a real merge here. The reference implementation does not merge.
@@ -83,6 +87,14 @@ fi
 
 # ------------------------------------------------------------------ contract
 command -v node >/dev/null || die "node is required (contract parser and review gate)"
+# Dry-run never launches a model, so pi can be missing there. A real run
+# without pi would burn the tree budget on empty reviewer files.
+if (( ! DRY_RUN )); then
+  command -v pi >/dev/null || die "pi is required (every role runs as pi -p)"
+else
+  # Dry-run does not launch pi; say so rather than looking like a green setup.
+  command -v pi >/dev/null || echo "note: pi not on PATH — a real run will fail here" >&2
+fi
 [[ -f "$LIB/governance.mjs" ]] || die "missing $LIB/governance.mjs"
 # Reviewers read the working-tree diff. Without a repo the empty-diff check
 # would burn the whole tree budget and then block a correct implementation.
@@ -162,6 +174,9 @@ run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-t
 }
 
 excerpt() { [[ -f "$1" ]] && sed -n "1,${2:-200}p" "$1" || true; }
+# Rank a --check exit: 0 (verdict) > 2 (findings only) > 1 (nothing). A worse
+# retry must not replace a file the gate could still use.
+rank_of() { case "$1" in 0) echo 2 ;; 2) echo 1 ;; *) echo 0 ;; esac; }
 
 # ------------------------------------------------------------------- prompts
 build_review_prompt() { # <focus> <issue> <difffile>
@@ -361,6 +376,9 @@ $(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
   fi
 
   touch "$work/exclusions.md"   # resume keeps the findings of earlier attempts
+  # stderr once per issue: the run log records every attempt, the operator
+  # does not need the same warning on every retry.
+  local independence_warned=0
 
   while :; do
     # Budget is checked before the attempt, never after — and only exit 3
@@ -449,17 +467,27 @@ $(cat "$work/exclusions.md")"
     fi
 
     # Three reviewers, three processes, in parallel, no shared verdicts.
-    # no_self_review: the model that wrote the diff never reviews it. When both
-    # sides resolve to "default" a collision cannot be proven, so the drop only
-    # applies to explicitly mapped models — map at least the implement roles.
+    # no_self_review: the model that wrote the diff never reviews it. Two roles
+    # that both resolve to "default" are in fact the same model — same pi, same
+    # settings — but the drop compares refs and an unset ref carries no identity
+    # to compare, so it cannot fire on exactly that pair. Dropping all three
+    # instead would leave ran_n at 0 and block every attempt until the budget is
+    # gone, which is worse than running. governance.mjs refuses this at
+    # generation time when no_self_review is written down and warns when it is
+    # only the default; here the run records it, and the master is told, so no
+    # one downstream mistakes three files for three opinions.
     # `ran`/`ran_focus` record exactly the reviewers started in THIS attempt,
     # in order. Gate, controller, master, and the retry loop consume this list —
     # never a directory glob — so a verdict written before a reviewer was
     # dropped cannot outlive its diff and gate attempts it never reviewed.
     local impl_model; impl_model="$(model_for "$role")"
-    local pids=() ran=() ran_focus=() ran_n=0 focus rmodel
+    local pids=() ran=() ran_focus=() ran_n=0 unmapped_n=0 focus rmodel
     for focus in security quality correctness; do
       rmodel="$(model_for "review.$focus")"
+      if [[ "$rmodel" == "default" ]]; then
+        # Whether the constraint is on does not change that this role is unmapped.
+        unmapped_n=$((unmapped_n+1))
+      fi
       if [[ "$NO_SELF_REVIEW" == "true" && "$impl_model" != "default" && "$(model_identity "$rmodel")" == "$(model_identity "$impl_model")" ]]; then
         echo "no_self_review: reviewer $focus dropped — $rmodel implemented this diff" >&2
         log_event "$root" "$issue_id" "review.$focus" "$rmodel" "dropped-self-review" "-"
@@ -478,6 +506,34 @@ $(cat "$work/exclusions.md")"
     done
     for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid" || true; done
 
+    # Three states, three sentences. Never a default that claims a check which
+    # did not run — that is what no_self_review: false used to tell the master.
+    local independence_note
+    if [[ "$NO_SELF_REVIEW" != "true" ]]; then
+      independence_note="Panel independence: no_self_review is off; independence is not checked."
+    elif (( ran_n == 0 )); then
+      # All dropped: do not claim anyone ran on a mapped model.
+      independence_note="Panel independence: no reviewer ran this attempt; the decision rests on the deterministic gate."
+    elif (( unmapped_n > 0 )); then
+      independence_note="Panel independence: $unmapped_n of $ran_n reviewers ran on pi's unmapped default model, which may be the model that wrote this diff. Independence is not verified for this attempt — weigh the reviewer agreement accordingly."
+    else
+      independence_note="Panel independence: every reviewer ran on an explicitly mapped model."
+    fi
+    if (( ! independence_warned )); then
+      if [[ "$NO_SELF_REVIEW" != "true" ]]; then
+        echo "warning: $independence_note" >&2
+        if (( unmapped_n > 0 )); then
+          log_event "$root" "$issue_id" "review" "default" "independence-unverified" "-"
+        fi
+      elif (( ran_n == 0 )); then
+        echo "warning: $independence_note" >&2
+      elif (( unmapped_n > 0 )); then
+        echo "warning: $unmapped_n of $ran_n reviewers are unmapped (default model); no_self_review cannot verify independence — map models.review.* in $AGENTS_FILE" >&2
+        log_event "$root" "$issue_id" "review" "default" "independence-unverified" "-"
+      fi
+      independence_warned=1
+    fi
+
     (( DRY_RUN )) && { echo "[dry-run] stopping after one pass for $issue_id"; return 0; }
 
     # One retry per reviewer whose output is not parseable JSON, as specified
@@ -486,17 +542,28 @@ $(cat "$work/exclusions.md")"
     # below which it blocks instead of approving. Only this attempt's
     # reviewers (ran) are eligible — the retry must never resurrect a dropped
     # reviewer to review its own implementation.
-    local i rfile
+    local i rfile rc nrc
     for (( i = 0; i < ran_n; i++ )); do
       focus="${ran_focus[$i]}"; rfile="${ran[$i]}"
       [[ -f "$rfile" ]] || continue
-      if ! node "$LIB/gate.mjs" --check "$rfile" >/dev/null 2>&1; then
-        echo "reviewer $focus returned unparseable JSON; one retry with an explicit reminder" >&2
-        run_role "$root" "$issue_id" "review.$focus" \
-          "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")
+      rc=0
+      node "$LIB/gate.mjs" --check "$rfile" >/dev/null 2>&1 || rc=$?
+      if (( rc == 0 )); then continue; fi
+      echo "reviewer $focus did not return a usable verdict; one retry with an explicit reminder" >&2
+      run_role "$root" "$issue_id" "review.$focus" \
+        "$(build_review_prompt "$focus" "$issue_line" "$work/diff.patch")
 
 REMINDER: your previous output was not parseable. Emit ONLY the JSON object — no prose, no code fence." \
-          "$rfile" "$att-retry" || true
+        "$rfile.retry" "$att-retry" || true
+      nrc=1
+      [[ -f "$rfile.retry" ]] && { nrc=0; node "$LIB/gate.mjs" --check "$rfile.retry" >/dev/null 2>&1 || nrc=$?; }
+      if (( $(rank_of "$nrc") > $(rank_of "$rc") )); then
+        echo "reviewer $focus retry taken (check $rc -> $nrc)" >&2
+        mv -f "$rfile.retry" "$rfile"
+        rm -f "$rfile.retry"
+      else
+        echo "reviewer $focus retry discarded (check $rc -> $nrc); keeping the original" >&2
+        rm -f "$rfile.retry"
       fi
     done
 
@@ -549,6 +616,7 @@ Controller proposal:
 $(cat "$work/controller.json")
 
 Deterministic gate: $(cat "$work/gate.json")
+${independence_note}
 Attempt $((ctrl_attempts + master_attempts)).
 
 Outcomes:
@@ -561,19 +629,23 @@ Emit ONLY this JSON, no prose and no code fence:
 
     # The verdict is machine-readable and fail-closed: anything that is not a
     # parseable decision counts as reject. Never grep prose for a verdict.
+    # Same shape as gate.mjs: every fence, then raw text; last valid decision
+    # wins, because an example fence before approve used to burn the attempt.
     local decision
     decision="$(node -e '
       const fs=require("node:fs");
       let text=""; try{ text=fs.readFileSync(process.argv[1],"utf8"); }catch{ console.log("reject"); process.exit(0); }
-      const fenced=text.match(/```(?:json)?\s*\n([\s\S]*?)```/);
-      const cand=fenced?fenced[1]:text;
-      const s=cand.indexOf("{"), e=cand.lastIndexOf("}");
+      const cands=[...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map(m=>m[1]);
+      cands.push(text);
       let d="reject";
-      if(s!==-1&&e>s){ try{
-        const j=JSON.parse(cand.slice(s,e+1));
-        const v=String(j.decision||"").toLowerCase();
-        if(["approve","reject","take_over"].includes(v)) d=v;
-      }catch{} }
+      for (const cand of cands) {
+        const s=cand.indexOf("{"), e=cand.lastIndexOf("}");
+        if(s===-1||e<=s) continue;
+        try {
+          const v=String(JSON.parse(cand.slice(s,e+1)).decision||"").toLowerCase();
+          if(["approve","reject","take_over"].includes(v)) d=v;
+        } catch {}
+      }
       console.log(d);
     ' "$work/master.txt")"
 
@@ -581,7 +653,7 @@ Emit ONLY this JSON, no prose and no code fence:
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state issue "$PIPELINE_DIR" "$root" "$issue_id" done >/dev/null || true
       echo "approved: $issue_id"
       mark_issue_done "$issue_raw"
-      (( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step"
+      (( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step" >&2
       return 0
     fi
 

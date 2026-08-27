@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.11
+pi install npm:pi-governance-pipeline@1.0.12
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.11
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.12
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.11
+pi -e npm:pi-governance-pipeline@1.0.12
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.11
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.12
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -144,8 +144,12 @@ Validation runs at generation time, and the reference script also runs it at
 startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach
 the loop. It refuses:
 `implement_master` equal to `implement`, reviewers on a single provider, a tree budget
-below the attempt sum, a split depth above 1 without a deliberate override, and an
-unknown `thinking` value. See `references/contract.md`.
+below the attempt sum, a split depth above 1 without a deliberate override, an
+unknown `thinking` value, and `constraints.no_self_review: true` written explicitly
+while fewer than two `review.*` roles are mapped (a `default`/`default` collision
+cannot be proven, so the panel would be one model reviewing itself). The defaulted
+`true` path — no `models:` block — still runs, and warns that `no_self_review` cannot
+fire. See `references/contract.md`.
 
 ## Safety
 
@@ -159,7 +163,9 @@ that in two places, not one:
 - `pipeline-guard` is a speed bump against an agent reaching for a destructive
   command by accident in an interactive session, **not a sandbox**. It pattern-
   matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
-  constructed commands are not a boundary. The governance-write gate covers the
+  constructed commands are not a boundary. The script's own `ISSUE_SOURCE=!command`,
+  `LINT_CMD`, and `TEST_CMD` run through `eval` and are env-overridable — whoever
+  sets the run's environment has code execution, with or without the guard. The governance-write gate covers the
   `write` and `edit` tools plus obvious bash and PowerShell write paths (`sed -i`,
   `tee`, `Set-Content`, redirections, `mv`/`cp`/`rm`) that name a governance file —
   not every way to rewrite `AGENTS.md`. `--exclude-tools bash,powershell` or a
@@ -188,12 +194,14 @@ rarely need changing:
 | `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; larger diffs are truncated and say so |
 | `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and says so |
 | `EXCLUSIONS_MAX_LINES` | `200` | Cap on prior findings re-entering the implement prompt; the newest blocks survive, the oldest are omitted |
-| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving |
+| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving. A value that is not an integer ≥ 1 is fatal (`die`), not reset — unlike the byte caps above. `--help` still prints because the check runs after flag parsing. `gate.mjs --min-reviewers` likewise refuses anything that is not an integer ≥ 1 |
 
 ## Releasing (maintainers)
 
-Publish happens only from a pushed tag — never from a local machine. The release
-workflow runs `tests/smoke.sh` first and then publishes via npm Trusted Publishing
+Publish happens only from a pushed tag — never from a local machine. `tests/smoke.sh`
+also runs on every push to `main` and every pull request (`.github/workflows/ci.yml`),
+so a broken asset is caught before the tag. The release
+workflow runs the same suite first and then publishes via npm Trusted Publishing
 (OIDC), which attaches a provenance attestation. Once the tarball is on the
 registry, the same workflow creates the GitHub Release for the tag — from
 `release-notes.md` at the repo root when you pre-seed curated notes there

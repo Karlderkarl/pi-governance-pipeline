@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# smoke.sh — pre-publish sanity for the pipeline assets. Runs in release.yml.
+# smoke.sh — pre-publish sanity for the pipeline assets. Runs in ci.yml on
+# push/PR and again in release.yml before publish.
 # Not packed into the tarball (package.json `files` whitelist).
 set -euo pipefail
 
@@ -25,6 +26,8 @@ git_init() {
 bash -n "$SH" || fail "auto-develop.sh has a syntax error"
 node --check "$LIB/governance.mjs" || fail "governance.mjs has a syntax error"
 node --check "$LIB/gate.mjs" || fail "gate.mjs has a syntax error"
+grep -F '^[1-9][0-9]*$' "$SH" | grep -q MIN_REVIEWERS \
+  || fail "MIN_REVIEWERS regex still allows 0"
 
 # The extension ships as raw TypeScript. Prefer the real SDK types so a missing
 # powershell overload cannot hide; fall back to tests/shims if npm cannot install.
@@ -77,8 +80,36 @@ grep -q 'pi_args+=(--approve)' "$ROOT/skills/governance-pipeline/SKILL.md" \
   || fail "SKILL.md is missing the gated --approve launch example"
 grep -q '< "$ppath"' "$ROOT/skills/governance-pipeline/SKILL.md" \
   || fail "SKILL.md is missing the stdin launch example"
+grep -q 'PIPELINE_ALLOW_DESTRUCTIVE' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing PIPELINE_ALLOW_DESTRUCTIVE"
+grep -q 'MIN_REVIEWERS' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing MIN_REVIEWERS"
+grep -q 'PIPELINE_ALLOW_DEEP_SPLIT' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing PIPELINE_ALLOW_DEEP_SPLIT"
+grep -q 'tasks.md' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md quickstart never creates tasks.md"
+grep -q 'eval' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md does not mention eval as code execution"
+grep -q 'APPEND_SYSTEM.md' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md is missing the project-trust / APPEND_SYSTEM.md warning"
+if grep -q 'pi has sub-agents' "$ROOT/skills/governance-pipeline/SKILL.md"; then
+  fail "SKILL.md still claims pi has built-in sub-agents"
+fi
+grep -q 'extension provides sub-agents' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md no longer warns against using extension sub-agents"
 grep -q 'Prompts are fed to `pi -p` on stdin' "$ROOT/prompts/pipeline-audit.md" \
   || fail "pipeline-audit.md is missing the stdin invariant"
+
+# ---------------------------------------------------------------- workflows
+# The suite gates releases; it must also gate the commits that reach them.
+[[ -f "$ROOT/.github/workflows/ci.yml" ]] || fail "no CI workflow: smoke.sh would only run at release time"
+grep -q "tests/smoke.sh" "$ROOT/.github/workflows/ci.yml" || fail "ci.yml does not run the smoke suite"
+if grep -qE '^[[:space:]]*id-token:' "$ROOT/.github/workflows/ci.yml"; then
+  fail "ci.yml must not request id-token: it would become a second path to the registry"
+fi
+if grep -qE '^[[:space:]]*(run: npm publish|NODE_AUTH_TOKEN)' "$ROOT/.github/workflows/ci.yml"; then
+  fail "ci.yml must not publish"
+fi
 
 # ---------------------------------------------------------------- contract: valid
 cat > "$TMP/AGENTS.md" <<'MD'
@@ -177,8 +208,9 @@ models:
 MD
 node "$LIB/governance.mjs" config "$TMP/think-same.md" >/dev/null \
   || fail "same model with different thinking on two roles was refused"
-node "$LIB/governance.mjs" config "$TMP/think-same.md" 2>&1 >/dev/null \
-  | grep -q "equals models.implement" \
+node "$LIB/governance.mjs" config "$TMP/think-same.md" >/dev/null 2>"$TMP/think-same.err" \
+  || fail "same model with different thinking must validate"
+grep -q "equals models.implement" "$TMP/think-same.err" \
   || fail "same model different thinking must still warn no_self_review"
 
 # ---------------------------------------------------------------- contract: refused
@@ -217,6 +249,57 @@ bad 'review:
     - high'
 bad 'review:
   blocking_severities: [critical, banana]'
+# Explicit no_self_review without a mapped panel is unenforceable.
+bad 'models:
+  constraints:
+    no_self_review: true'
+
+# Defaulted no_self_review (no constraints key) must still parse — that is
+# the backward-compat path — but the warning has to name the panel effect.
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: 25\n```\n' > "$TMP/nomodels.md"
+node "$LIB/governance.mjs" config "$TMP/nomodels.md" >/dev/null 2>"$TMP/nomodels.err" \
+  || fail "governance without a models: block must still parse"
+grep -q "no_self_review cannot fire" "$TMP/nomodels.err" \
+  || fail "missing models: block did not warn that the panel is one model"
+
+# Two mapped reviewers satisfy explicit no_self_review even if the third is absent.
+printf '# A\n```yaml\nmodels:\n  constraints:\n    no_self_review: true\n  review:\n    security: { provider: a, model: r1 }\n    quality:  { provider: b, model: r2 }\n```\n' > "$TMP/explicit-ok.md"
+node "$LIB/governance.mjs" config "$TMP/explicit-ok.md" >/dev/null \
+  || fail "explicit no_self_review with two mapped reviewers was refused"
+
+# A mapped implement against unmapped reviewers also cannot be told apart
+# ("default" never equals provider/model). Warn, do not fail.
+printf '# A\n```yaml\nmodels:\n  implement: { provider: a, model: i }\n```\n' > "$TMP/nopanel.md"
+node "$LIB/governance.mjs" config "$TMP/nopanel.md" >/dev/null 2>"$TMP/nopanel.err" \
+  || fail "absent models.review must degrade, not fail"
+grep -q "models.review" "$TMP/nopanel.err" \
+  || fail "an unenforceable no_self_review produced no warning"
+printf '# A\n```yaml\nmodels:\n  implement: { provider: a, model: i }\n  constraints:\n    no_self_review: true\n```\n' > "$TMP/nopanel-explicit.md"
+rc=0; node "$LIB/governance.mjs" config "$TMP/nopanel-explicit.md" >/dev/null 2>"$TMP/nopanel-explicit.err" || rc=$?
+[[ $rc -eq 2 ]] || fail "explicit no_self_review with no mapped reviewers must be a contract error (got $rc)"
+grep -q "contract error" "$TMP/nopanel-explicit.err" || fail "explicit unenforceable no_self_review must name itself an error"
+printf '# A\n```yaml\nmodels:\n  implement: { provider: a, model: i }\n  constraints:\n    no_self_review: false\n```\n' > "$TMP/nopanel-off.md"
+node "$LIB/governance.mjs" config "$TMP/nopanel-off.md" >/dev/null 2>"$TMP/nopanel-off.err" \
+  || fail "no_self_review: false must not be an error"
+if grep -q 'models.review' "$TMP/nopanel-off.err"; then
+  fail "opting out of no_self_review must not warn about the panel"
+fi
+
+# A models: block that only turns the constraint off is still a map that maps
+# nothing — warn, do not stay silent.
+printf '# A\n```yaml pipeline-contract\nmodels:\n  constraints:\n    no_self_review: false\n```\n' > "$TMP/nsr-off.md"
+node "$LIB/governance.mjs" config "$TMP/nsr-off.md" >/dev/null 2>"$TMP/nsr-off.err" \
+  || fail "no_self_review: false with no mapped roles must still parse"
+grep -q "no role is mapped" "$TMP/nsr-off.err" \
+  || fail "constraints-only models block produced no warning"
+
+# Mapped review.* without provider: diversity and no_self_review cannot compare.
+bad 'models:
+  implement: { model: alpha }
+  review:
+    security:    { model: beta }
+    quality:     { model: gamma }
+    correctness: { model: delta }'
 
 printf '# A\n```yaml\nbudgets:\n  max_split_depth: 3\n```\n' > "$TMP/deep.md"
 PIPELINE_ALLOW_DEEP_SPLIT=1 node "$LIB/governance.mjs" config "$TMP/deep.md" >/dev/null 2>&1 \
@@ -232,7 +315,12 @@ models:
   master_review:    { provider: b, model: m2 }
 ```
 MD
-node "$LIB/governance.mjs" config "$TMP/warn.md" 2>&1 >/dev/null | grep -q "contract warning" \
+# stderr to a file, never through a pipe into `grep -q`: grep exits at the
+# first match and SIGPIPEs the writer, and pipefail then fails the assertion as
+# soon as a second warning is added.
+node "$LIB/governance.mjs" config "$TMP/warn.md" >/dev/null 2>"$TMP/warn.err" \
+  || fail "warn.md must validate; warnings are not errors"
+grep -q "contract warning" "$TMP/warn.err" \
   || fail "master_review == implement_master produced no warning"
 
 # ---------------------------------------------------------------- gate.mjs
@@ -268,6 +356,128 @@ grep -q '"verdict": "blocked"' "$TMP/gate-unk.json" || fail "unknown severity ve
 grep -q '"blocker"' "$TMP/gate-unk.json" || fail "blocker finding missing from gate output"
 grep -q 'CRITICAL' "$TMP/gate-unk.json" || fail "trimmed CRITICAL finding missing from gate output"
 grep -q '"unknown_severity"' "$TMP/gate-unk.json" || fail "unknown_severity array missing"
+
+# --min-reviewers must refuse a typo instead of clamping the floor to 1.
+rc=0; node "$LIB/gate.mjs" --min-reviewers zwei "$TMP/r-ok.json" >/dev/null 2>"$TMP/min-err" || rc=$?
+[[ $rc -eq 1 ]] || fail "--min-reviewers zwei must be a usage error (got $rc)"
+grep -qi 'zwei' "$TMP/min-err" || fail "--min-reviewers error must name the bad value"
+rc=0; node "$LIB/gate.mjs" --min-reviewers 0 "$TMP/r-ok.json" >/dev/null 2>"$TMP/min0-err" || rc=$?
+[[ $rc -eq 1 ]] || fail "--min-reviewers 0 must be a usage error (got $rc)"
+
+# --blocking / --followup must refuse unknown severities instead of emptying the lists.
+rc=0; node "$LIB/gate.mjs" --blocking critical,banana "$TMP/r-ok.json" >/dev/null 2>"$TMP/blk-err" || rc=$?
+[[ $rc -eq 1 ]] || fail "--blocking banana must be a usage error (got $rc)"
+grep -qi 'banana' "$TMP/blk-err" || fail "--blocking error must name the unknown severity"
+rc=0; node "$LIB/gate.mjs" --followup medium,nope "$TMP/r-ok.json" >/dev/null 2>"$TMP/fol-err" || rc=$?
+[[ $rc -eq 1 ]] || fail "--followup nope must be a usage error (got $rc)"
+grep -qi 'nope' "$TMP/fol-err" || fail "--followup error must name the unknown severity"
+
+# A sample fence before the verdict must not make the reviewer unavailable.
+# The sample has no '{', so the raw-text fallback's first brace is the verdict.
+printf 'example:\n```\nconsole.log("hi")\n```\n{"role":"quality","verdict":"approve","findings":[]}\n' > "$TMP/r-fence.json"
+node "$LIB/gate.mjs" --check "$TMP/r-fence.json" >/dev/null \
+  || fail "extractJson did not fall back to raw text after a failed fence"
+node "$LIB/gate.mjs" "$TMP/r-fence.json" >/dev/null \
+  || fail "gate blocked a clean review that sat after a sample fence"
+# Invalid JSON in the first fence, valid object in the second.
+printf '```json\n{not json}\n```\n```json\n{"role":"quality","verdict":"approve","findings":[]}\n```\n' > "$TMP/r-fence2.json"
+node "$LIB/gate.mjs" --check "$TMP/r-fence2.json" >/dev/null \
+  || fail "extractJson did not try the next fence after a parse failure"
+
+# Schema echo in the first fence (`verdict: approve|reject` from the prompt)
+# is not a review. The real verdict after it must win, and findings must land.
+cat > "$TMP/r-schema-echo.json" <<'EOF'
+```json
+{"role":"security","verdict":"approve|reject","findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""}]}
+```
+```json
+{"role":"security","verdict":"reject","findings":[{"severity":"critical","file":"a.ts","line":3,"title":"RCE"}]}
+```
+EOF
+node "$LIB/gate.mjs" --check "$TMP/r-schema-echo.json" >/dev/null \
+  || fail "--check rejected a verdict that followed a schema-echo fence"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high "$TMP/r-schema-echo.json" > "$TMP/gate-schema-echo.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "verdict after a schema echo must still block (got $rc)"
+grep -q '"reviewers_used": 1' "$TMP/gate-schema-echo.json" \
+  || fail "schema-echo-then-verdict counted the reviewer unavailable"
+grep -q 'RCE' "$TMP/gate-schema-echo.json" \
+  || fail "real findings after a schema echo did not reach the gate"
+
+# Severity decides: a schemakonform critical with an off-schema verdict word
+# still blocks. --check (stage 1) fails so the reviewer still gets its retry.
+echo '{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE","rationale":"r","suggestion":"s"}]}' > "$TMP/r-blocked-word.json"
+echo '{"role":"quality","verdict":"approve","findings":[]}' > "$TMP/r-ok2.json"
+echo '{"role":"correctness","verdict":"approve","findings":[]}' > "$TMP/r-ok3.json"
+rc=0; node "$LIB/gate.mjs" --check "$TMP/r-blocked-word.json" >/dev/null 2>&1 || rc=$?
+[[ $rc -eq 2 ]] || fail "--check must be exit 2 for findings without a valid verdict word (got $rc)"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 \
+  "$TMP/r-blocked-word.json" "$TMP/r-ok2.json" "$TMP/r-ok3.json" > "$TMP/gate-blocked-word.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "critical finding with verdict blocked must still block (got $rc)"
+grep -q '"verdict": "blocked"' "$TMP/gate-blocked-word.json" || fail "off-schema verdict must not clear the gate"
+grep -q 'RCE' "$TMP/gate-blocked-word.json" || fail "critical finding missing after off-schema verdict word"
+echo '{"role":"security","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE","rationale":"r","suggestion":"s"}]}' > "$TMP/r-no-verdict.json"
+rc=0; node "$LIB/gate.mjs" --check "$TMP/r-no-verdict.json" >/dev/null 2>&1 || rc=$?
+[[ $rc -eq 2 ]] || fail "--check must be exit 2 when verdict is missing (got $rc)"
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewers 2 \
+  "$TMP/r-no-verdict.json" "$TMP/r-ok2.json" "$TMP/r-ok3.json" > "$TMP/gate-no-verdict.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "critical finding with missing verdict must still block (got $rc)"
+grep -q 'RCE' "$TMP/gate-no-verdict.json" || fail "critical finding missing when verdict field is absent"
+
+# A typo in the flag name must not become a phantom reviewer with floor 1.
+rc=0; node "$LIB/gate.mjs" --blocking critical,high --min-reviewrs 2 "$TMP/r-ok.json" >/dev/null 2>"$TMP/unk-flag.err" || rc=$?
+[[ $rc -eq 1 ]] || fail "unknown flag must be a usage error (got $rc)"
+grep -q -- '--min-reviewrs' "$TMP/unk-flag.err" || fail "unknown flag error must name the flag"
+# Only a schema echo, no verdict: fail-closed. --check must fail so the
+# pipeline still grants the one retry.
+cat > "$TMP/r-schema-only.json" <<'EOF'
+```json
+{"role":"security","verdict":"approve|reject","findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""}]}
+```
+EOF
+if node "$LIB/gate.mjs" --check "$TMP/r-schema-only.json" >/dev/null 2>&1; then
+  fail "--check accepted a schema echo as a verdict"
+fi
+rc=0; node "$LIB/gate.mjs" "$TMP/r-schema-only.json" > "$TMP/gate-schema-only.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "schema-echo-only must be unavailable (got $rc)"
+grep -q '"reviewers_used": 0' "$TMP/gate-schema-only.json" \
+  || fail "schema-echo-only must not count as a reviewer"
+# Prose with no JSON at all stays unavailable — no regexing prose into a verdict.
+printf 'Looks fine to me, ship it.\n' > "$TMP/r-prose.json"
+rc=0; node "$LIB/gate.mjs" --check "$TMP/r-ok.json" >/dev/null 2>&1 || rc=$?
+[[ $rc -eq 0 ]] || fail "--check must be exit 0 for a usable verdict (got $rc)"
+rc=0; node "$LIB/gate.mjs" --check "$TMP/r-prose.json" >/dev/null 2>&1 || rc=$?
+[[ $rc -eq 1 ]] || fail "--check must be exit 1 for prose with no JSON (got $rc)"
+
+# Master-decision twin of extractJson: last valid decision wins, else reject.
+cat > "$TMP/master-echo.txt" <<'EOF'
+```json
+{"decision":"approve|reject|take_over","reasons":["..."]}
+```
+```json
+{"decision":"approve","reasons":["ok"]}
+```
+EOF
+cat > "$TMP/parse-master.js" <<'JS'
+const fs = require("node:fs");
+const text = fs.readFileSync(process.argv[2], "utf8");
+const cands = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
+cands.push(text);
+let d = "reject";
+for (const cand of cands) {
+  const s = cand.indexOf("{");
+  const e = cand.lastIndexOf("}");
+  if (s === -1 || e <= s) continue;
+  try {
+    const v = String(JSON.parse(cand.slice(s, e + 1)).decision || "").toLowerCase();
+    if (["approve", "reject", "take_over"].includes(v)) d = v;
+  } catch {}
+}
+console.log(d);
+JS
+master_got="$(node "$TMP/parse-master.js" "$TMP/master-echo.txt")"
+[[ "$master_got" == "approve" ]] \
+  || fail "master parser did not take the last valid decision after a schema echo (got $master_got)"
+grep -q 'cands.push(text)' "$SH" || fail "auto-develop.sh master parser lost the raw-text fallback"
 
 # ---------------------------------------------------------------- state store
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state init "$TMP/proj" issue-1 >/dev/null
@@ -339,6 +549,61 @@ out="$(cd "$proj2" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (dr
 echo "$out" | grep -q "dropped" || fail "no_self_review did not drop the colliding reviewer: $out"
 echo "$out" | grep -q "review.quality" || fail "non-colliding reviewers must still run: $out"
 
+# MIN_REVIEWERS is the floor of the panel: a bad value dies, it is not reset.
+# --help still prints because the check runs after flag parsing.
+MIN_REVIEWERS=0 bash "$SH" --help >/dev/null \
+  || fail "--help must not die on MIN_REVIEWERS=0"
+for bad_min in 0 zwei -2; do
+  rc=0; (cd "$proj2" && MIN_REVIEWERS="$bad_min" bash auto-develop.sh --dry-run) \
+    >/dev/null 2>"$TMP/minrev.err" || rc=$?
+  [[ $rc -ne 0 ]] || fail "MIN_REVIEWERS=$bad_min was accepted instead of refused"
+  grep -q "MIN_REVIEWERS" "$TMP/minrev.err" || fail "MIN_REVIEWERS refusal must name the variable"
+done
+(cd "$proj2" && MIN_REVIEWERS=3 bash auto-develop.sh --dry-run) >/dev/null 2>&1 \
+  || fail "a valid MIN_REVIEWERS was refused"
+
+# An unmapped reviewer runs the default model; the run must say so rather
+# than present three files as three opinions.
+proj_ind="$TMP/run-indep"; mkdir -p "$proj_ind/.pipeline/lib"
+cp "$SH" "$proj_ind/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_ind/.pipeline/lib/"
+cat > "$proj_ind/AGENTS.md" <<'MD'
+# A
+```yaml
+models:
+  implement: { provider: a, model: i }
+```
+MD
+printf -- "- [ ] issue-ind: unmapped panel\n" > "$proj_ind/tasks.md"
+git_init "$proj_ind"
+out="$(cd "$proj_ind" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (unmapped panel) failed: $out"
+echo "$out" | grep -q "3 of 3 reviewers are unmapped" \
+  || fail "an unmapped review panel was not reported at run time: $out"
+grep -rq "independence-unverified" "$proj_ind/.pipeline/logs" \
+  || fail "unmapped reviewers must be recorded in the run log"
+out="$(cd "$proj2" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (mapped panel) failed: $out"
+if echo "$out" | grep -q "reviewers are unmapped"; then
+  fail "a mapped panel must not report unverified independence: $out"
+fi
+
+# no_self_review: false must not tell the master that independence was checked.
+# --dry-run returns before the master prompt is written (existing early return;
+# the attempt loop is not to be rebuilt), so we assert the lie is absent from
+# every rendered prompt and from stderr, and that the off-switch is named.
+proj_nsroff="$TMP/run-nsroff"; mkdir -p "$proj_nsroff/.pipeline/lib"
+cp "$SH" "$proj_nsroff/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_nsroff/.pipeline/lib/"
+cp "$TMP/nsr-off.md" "$proj_nsroff/AGENTS.md"
+printf -- "- [ ] issue-off: nsr off\n" > "$proj_nsroff/tasks.md"
+git_init "$proj_nsroff"
+out="$(cd "$proj_nsroff" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (nsr off) failed: $out"
+echo "$out" | grep -q "independence is not checked" \
+  || fail "no_self_review: false did not say independence is unchecked: $out"
+if echo "$out" | grep -q "every reviewer ran on an explicitly mapped model"; then
+  fail "no_self_review: false still claimed a mapped panel: $out"
+fi
+if grep -rq "every reviewer ran on an explicitly mapped model" "$proj_nsroff/.pipeline/prompts" 2>/dev/null; then
+  fail "no_self_review: false planted the mapped-panel sentence in a prompt"
+fi
+
 # thinking is a launch parameter: same model at different levels still drops
 proj_think="$TMP/run-think"; mkdir -p "$proj_think/.pipeline/lib"
 cp "$SH" "$proj_think/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_think/.pipeline/lib/"
@@ -374,8 +639,9 @@ models:
     correctness: { provider: d, model: m4 }
 ```
 MD
-node "$LIB/governance.mjs" config "$TMP/warn-master.md" 2>&1 >/dev/null \
-  | grep -q "equals models.implement_master" \
+node "$LIB/governance.mjs" config "$TMP/warn-master.md" >/dev/null 2>"$TMP/warn-master.err" \
+  || fail "warn-master.md must validate; warnings are not errors"
+grep -q "equals models.implement_master" "$TMP/warn-master.err" \
   || fail "review.* == implement_master produced no warning"
 
 # ---------------------------------------------------------------- e2e: escalated no_self_review
@@ -535,8 +801,9 @@ models:
     correctness: { provider: c, model: m3 }
 ```
 MD
-node "$LIB/governance.mjs" config "$TMP/warn-floor.md" 2>&1 >/dev/null \
-  | grep -q "fewer than two reviewers" \
+node "$LIB/governance.mjs" config "$TMP/warn-floor.md" >/dev/null 2>"$TMP/warn-floor.err" \
+  || fail "warn-floor.md must validate; warnings are not errors"
+grep -q "fewer than two reviewers" "$TMP/warn-floor.err" \
   || fail "panel below the floor produced no generation-time warning"
 
 # ---------------------------------------------------------------- e2e: reviewer floor
@@ -862,5 +1129,124 @@ out="$(cd "$proj_nogit" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-nogit.
 [[ "$rc" -ne 0 ]] || fail "missing git repo exited 0: $out"
 echo "$out" | grep -q "requires a git repository" || fail "missing git repo did not fail at start: $out"
 if [[ -f "$TMP/calls-nogit.log" ]]; then fail "missing git repo still invoked pi"; fi
+
+# Missing pi must die at start of a real run, not after burning the tree budget.
+proj_nopi="$TMP/run-nopi"; mkdir -p "$proj_nopi/.pipeline/lib"
+cp "$SH" "$proj_nopi/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_nopi/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_nopi/AGENTS.md"
+printf -- "- [ ] issue-nopi: no pi\n" > "$proj_nopi/tasks.md"
+git_init "$proj_nopi"
+nopi_bin="$TMP/nopi-bin"; mkdir -p "$nopi_bin"
+for cmd in node git bash sh; do
+  src="$(command -v "$cmd" 2>/dev/null)" || continue
+  ln -sf "$src" "$nopi_bin/$cmd" 2>/dev/null || cp "$src" "$nopi_bin/$cmd"
+done
+rc=0
+out="$(cd "$proj_nopi" && PATH="$nopi_bin:/usr/bin:/bin" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "missing pi exited 0: $out"
+echo "$out" | grep -q "pi is required" || fail "missing pi did not name pi: $out"
+
+# Dry-run without pi must not look like a green setup. Keep git/node from the
+# real PATH; drop only directories that ship a `pi` binary (git's own exec
+# path is not a symlink into nopi-bin).
+path_nopi=""
+_ifs="$IFS"; IFS=:
+for _d in $PATH; do
+  IFS="$_ifs"
+  [ -n "$_d" ] || continue
+  if [ -e "$_d/pi" ] || [ -e "$_d/pi.exe" ] || [ -e "$_d/pi.cmd" ]; then continue; fi
+  path_nopi="${path_nopi:+$path_nopi:}$_d"
+  IFS=:
+done
+IFS="$_ifs"
+out="$(cd "$proj_nopi" && PATH="$nopi_bin:$path_nopi" bash auto-develop.sh --dry-run 2>&1)" \
+  || fail "dry-run without pi died: $out"
+echo "$out" | grep -q "pi not on PATH" || fail "dry-run without pi did not note the missing binary: $out"
+
+# All three reviewers equal implementer: that config is one provider and the
+# contract refuses it (diversity). The ran_n==0 sentence must still exist so a
+# generator that drops a whole panel cannot tell the master everyone ran.
+grep -q "no reviewer ran this attempt" "$SH" \
+  || fail "dropped-panel independence note missing from auto-develop.sh"
+# Diese Regel ist es, die ran_n==0 unerreichbar macht. Fällt sie, wird der
+# Zweig oben live — dann muss er auch fahrbar getestet werden.
+cat > "$TMP/one-provider-agents.md" <<'MD'
+# A
+```yaml
+models:
+  implement: { provider: a, model: same }
+  review:
+    security:    { provider: a, model: same }
+    quality:     { provider: a, model: same }
+    correctness: { provider: a, model: same }
+```
+MD
+rc=0; node "$LIB/governance.mjs" config "$TMP/one-provider-agents.md" >/dev/null 2>&1 || rc=$?
+[[ $rc -eq 2 ]] || fail "single-provider review panel must be a contract error (got $rc)"
+
+# Retry must not erase a critical finding when the retry is worse (prose).
+proj_keep="$TMP/run-retry-keep"; mkdir -p "$proj_keep/.pipeline/lib"
+cp "$SH" "$proj_keep/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_keep/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_keep/AGENTS.md"
+printf -- "- [ ] issue-keep: keep original findings\n" > "$proj_keep/tasks.md"
+git_init "$proj_keep"
+stub_keep="$TMP/stub-keep"; mkdir -p "$stub_keep"
+cat > "$stub_keep/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  *REMINDER*) echo 'Sure! Here is my review in prose.' ;;
+  "You review a diff for one concern only: security"*)
+    echo '{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE","rationale":"r","suggestion":"s"}]}' ;;
+  "You review a diff for one concern only:"*)
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_keep/pi"
+rc=0
+out="$(cd "$proj_keep" && PATH="$stub_keep:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "prose retry over a critical finding cleared the gate: $out"
+grep -q 'RCE' "$proj_keep/.pipeline/work/issue-keep/gate.json" \
+  || fail "critical finding was lost to a worse retry: $(cat "$proj_keep/.pipeline/work/issue-keep/gate.json")"
+echo "$out" | grep -q "retry discarded" || fail "worse retry was not reported discarded: $out"
+
+# Retry that actually improves (prose -> verdict) is taken.
+proj_take="$TMP/run-retry-take"; mkdir -p "$proj_take/.pipeline/lib"
+cp "$SH" "$proj_take/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_take/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_take/AGENTS.md"
+printf -- "- [ ] issue-take: take improved retry\n" > "$proj_take/tasks.md"
+git_init "$proj_take"
+stub_take="$TMP/stub-take"; mkdir -p "$stub_take"
+cat > "$stub_take/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  *REMINDER*)
+    echo '{"role":"security","verdict":"approve","findings":[]}' ;;
+  "You review a diff for one concern only: security"*) echo 'not json at all' ;;
+  "You review a diff for one concern only:"*)
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_take/pi"
+rc=0
+out="$(cd "$proj_take" && PATH="$stub_take:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "improved retry was not taken (rc=$rc): $out"
+echo "$out" | grep -q "retry taken" || fail "improved retry was not reported taken: $out"
+echo "$out" | grep -q "^approved: issue-take" || fail "improved retry did not let the issue approve: $out"
 
 echo "smoke OK"
