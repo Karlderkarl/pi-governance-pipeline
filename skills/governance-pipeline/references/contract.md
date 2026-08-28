@@ -13,11 +13,12 @@ The versioned interface between the two modes. `govern` writes these fields; `au
 
 ## Reading rules
 
-- All fields live in `AGENTS.md`, in a fenced YAML block.
+- All fields live in `AGENTS.md`, in a fenced YAML block (` ```yaml ` or ` ```yml `, optionally marked `pipeline-contract`). A `~~~` fence or an unclosed backtick fence does not parse.
 - Mark the real block `yaml pipeline-contract`. If several YAML fences contain contract keys, the marked one is used; otherwise the first is used and a warning names how many were found.
+- If the file contains `pipeline-contract` or a line matching `models:` / `budgets:` / `review:`, **but no fenced YAML block parsed**, that is a contract error (exit 2) — not silent defaults that would drop the configured budgets and models. A file with neither still takes the documented default path.
 - Every field is optional. Absence is a documented state, never an error.
 - `automate` reads; it must never write to governance. Only `govern` writes.
-- Unknown fields are ignored, not rejected — forward compatibility for v2.
+- Unknown fields are ignored, not rejected — forward compatibility for v2. They still produce a **warning** that names the key (`models.implement_msater`, `budgets.max_atempts_controller`, …) so a typo cannot vanish into the merged config unnoticed.
 
 ## models
 
@@ -115,8 +116,11 @@ The one thing absence cannot do is buy a guarantee. `no_self_review` written int
 - a `thinking` value that is not one of pi's levels
 - `review.blocking_severities` or `review.followup_severities` that is not an array of known severities, or a YAML block sequence
 - an explicit `constraints.no_self_review` with fewer than two mapped `review.*` roles — the field promises independence the panel cannot deliver
+- a file that looks like a contract (`pipeline-contract`, or a `models:` / `budgets:` / `review:` line) when no fenced YAML block parsed
 
-Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2) **and** on every `state` command, so an invalid contract cannot reach the loop or freeze a garbage budget into a state file. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field.
+Each failure names the offending field and the governance file it came from. The reference script also runs this validator at startup (`governance.mjs config`, exit 2) **and** on every `state` command, so an invalid contract cannot reach the loop or freeze a garbage budget into a state file. `max_split_depth` is validated even though the bundled script never splits — generators that implement splitting must still honor the field. Warnings from those `state` calls are printed once per pipeline directory (fingerprint under `.pipeline/.contract-warning-fingerprint`); errors stay loud every time.
+
+Validation also warns (never refuses) on **unknown contract keys** at every map (`models.*`, `models.review.*`, `models.constraints.*`, `budgets.*`, `review.*`, top-level). Unknown keys stay ignored so a v2 field remains forward-compatible; the warning is what stops `implement_msater` from shipping as a junk field.
 
 Validation also emits **warnings** (non-blocking) for configurations that are legal but defeat the design: `master_review` equal to `implement_master` (the escalated model would review its own work), a `review.*` model equal to `implement` under `no_self_review` (it is dropped at run time, leaving fewer reviewers), and any configuration where two or more `review.*` models equal the same implementation model. That last case is recoverable only by escalating: `no_self_review` leaves fewer than two reviewers on that path, so the runtime gate blocks **every** attempt on it and the matching attempt budget is spent with no chance of approval.
 

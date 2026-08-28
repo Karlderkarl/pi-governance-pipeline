@@ -17,12 +17,14 @@ Structural blueprint for the generated `auto-develop.sh`. Stack-agnostic: the ga
 
 ```
 auto-develop.sh              # entry point, the loop
-.pipeline/
+.pipeline/                   # MUST be gitignored — plaintext diffs and prompts
   state/<root_id>.json       # counters and budget
   logs/<root_id>/<run>.jsonl # per-run event log
-  prompts/                   # rendered prompts, one per role and attempt, for debugging
+  prompts/                   # rendered prompts, pruned to PROMPT_KEEP_RUNS run ids
 tasks.md                     # or the issue source declared in governance
 ```
+
+`.pipeline/` is gitignore-pflicht. A single issue can archive tens of prompt files and hundreds of kilobytes of diffs, including untracked source, in plaintext. The reference script warns at start if `.pipeline/` is not ignored, and deletes prompt files whose run-id suffix is older than `PROMPT_KEEP_RUNS` (default 3).
 
 ## State file
 
@@ -79,6 +81,7 @@ Increment `runs_used` once per implementation attempt, regardless of which role 
 | `--auto-merge` | off | **Stub in the reference script.** Parsed and confirmed at the safety gate so an adapted pipeline can merge an approved PR; the bundled script prints a notice and does not merge. |
 | `--dry-run` | off | Renders prompts and prints the plan without calling a model |
 | `--issue <id>` | — | Runs a single issue |
+| `--max-runs <n>` | off | Optional **invocation** cap across issues. Not a PRD field — `max_runs_per_tree` remains per issue. Added because 30 open tasks otherwise have no global ceiling. |
 
 `--unattended` and `--auto-merge` both prompt once at startup, before the loop, and refuse to proceed on a non-interactive stdin unless an explicit `--yes` accompanies them. pi has no permission dialog and `pi -p` has no UI, so this startup gate is the only place a human can intervene.
 
@@ -86,7 +89,7 @@ Increment `runs_used` once per implementation attempt, regardless of which role 
 
 ## Logging
 
-One JSONL event per step: timestamp, issue, role, model, exit status, token usage where available, and the path to the rendered prompt. Enough to answer "why did issue-42 cost 60 calls" after the fact.
+One JSONL event per step: timestamp, issue, role, model, exit status, and the path to the rendered prompt. Token usage is not recorded — `log_event` does not parse `pi --mode json`. Enough to answer "why did issue-42 cost 60 calls" after the fact.
 
 Never log secrets or full file contents. Log the prompt path, not the prompt.
 
@@ -105,5 +108,7 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.
 10. `--dry-run` writes no state and consumes no budget.
 11. An empty working-tree diff is a rejected attempt, not a clean review.
-12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach. `MEMORY.md` is copied out and written back — stash `-u` would otherwise swallow the blocker history.
+12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach, and deletes cached `research.md` so the next pass gathers context again. `MEMORY.md` is copied out and written back — stash `-u` would otherwise swallow the blocker history.
 13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `CLAUDE.md`) and the `.pipeline/` and `.pi/` directories. An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.
+14. Diff truncation is per file, not a byte prefix of the concatenated patch. Omitted paths are named in a manifest so the reviewer prompt says what was not judged. Untracked files (TDD tests) are considered first.
+15. Two consecutive attempts with `reviewers_used < MIN_REVIEWERS` abort as a configuration error before controller and master of the second attempt.

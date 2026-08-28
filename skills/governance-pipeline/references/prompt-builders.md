@@ -21,20 +21,25 @@ Never tell a role its own attempt count beyond "you have N attempts left". Never
 
 ## research
 
-Input: issue, `SOUL.md` (stack and architecture sections).
+Input: issue, `SOUL.md` (stack and architecture sections), and any `MEMORY.md` blocker entries for this issue.
 Output: prose notes on relevant files, existing patterns, and pitfalls.
 
-Runs once per issue, not per attempt. Its output is cached and passed to every subsequent implementation attempt for that issue.
+Runs once per issue, not per attempt, and is cached for repair retries. `take_over` deletes the cache so the escalated model gathers context again instead of inheriting the failed approach.
 
 ## implement
 
-Input: issue, research notes, `SOUL.md` coding standards, and — on a retry — the exclusion list of prior findings.
+Input: issue, research notes, `SOUL.md` coding standards, `MEMORY.md` blocker history for this issue, and — on a retry — two exclusion streams:
+
+- **Review findings** (from `gate.json`, rewritten as prose: file + title/rationale, no line numbers). Never truncated. Blocking findings survive a chatty linter.
+- **Tool output** (lint, tests, empty-diff notes). Capped at `EXCLUSIONS_MAX_LINES` newest lines.
+
+Line numbers are stripped because `implement_master` does not receive the diff, so `file:line` would be unresolvable.
 
 Instruct it to write the test first, watch it fail, then make it pass. On a retry, state plainly which findings caused the rejection and that repeating them will fail again.
 
 ## reviewers
 
-Three roles, three separate processes, three separate contexts. Each receives: issue, diff, and its own slice of `SOUL.md`. None receives another's verdict, and none is told how many reviewers exist.
+Three roles, three separate processes, three separate contexts. Each receives: issue, diff, and its own slice of `SOUL.md`. None receives another's verdict, and none is told how many reviewers exist. The reference script launches reviewers with `-nc` so pi does not load `AGENTS.md` (which would leak panel size, reviewer roles, and the implementer model) and with `-t read,grep,find,ls` (read-only). The diff is truncated **per file**; omitted paths are named in a manifest at the bottom of the diff so the reviewer can see what was not judged.
 
 | Role | Focus |
 |---|---|
@@ -108,6 +113,6 @@ The decision must be machine-readable — reviewers already emit JSON, and the m
 
 ## implement_master
 
-Input: issue, research notes, and the accumulated findings as an **exclusion list**.
+Input: issue, research notes (regenerated after `take_over`), and the accumulated findings as an **exclusion list** in prose.
 
-Explicitly do not pass the failed diff. The point of switching models is a different approach; handing over the broken code anchors the new model to the reasoning that already failed. State that previous attempts failed for the listed reasons and that it should solve the issue afresh.
+Explicitly do not pass the failed diff. The point of switching models is a different approach; handing over the broken code anchors the new model to the reasoning that already failed. State that previous attempts failed for the listed reasons and that it should solve the issue afresh. Findings name a file and a symbol/context, not a line number — the line would point at a diff this role does not see.

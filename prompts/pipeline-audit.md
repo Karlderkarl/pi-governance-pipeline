@@ -22,5 +22,11 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 15. `take_over` stashes the rejected tree; `MEMORY.md` is copied out and written back.
 16. Reviewer JSON whose severity is missing, untrimmed, or not `critical|high|medium|low` blocks rather than disappearing.
 17. Reviewers are separate `pi -p` processes, not sub-agents of the implementer.
+18. Credential preflight is warn-only. The script must not call `pi auth check --model <id>` (openrouter ids such as `google/gemini-*` would abort a healthy run).
+19. Role toolset: every role passes `--no-session`; `review.*` passes `-nc` and `-t read,grep,find,ls`; `controller` and `master_review` pass `--no-tools` once the diff is truncated per file with an omitted-path manifest.
+20. An optional `--max-runs <n>` caps the invocation across issues. Default off. `max_runs_per_tree` remains per issue.
+21. `MEMORY.md` blocker entries for the current issue are fed back into the research and implement prompts. Blocking gate findings are stored separately from lint/test output and are never displaced by the exclusions line cap; they are rewritten as prose without line numbers.
+22. Unknown contract keys warn (never refuse). A `pipeline-contract` / `models:` / `budgets:` / `review:` intent with no parsed fence is a contract error. `state` warnings are deduplicated per `.pipeline/` directory; errors stay loud. Every `state` call sets `GOVERNANCE_AGENTS`.
+23. `.pipeline/` is gitignored (or the script warns). Prompt archives are pruned. `AGENTS.override.md`, if present, is warned about at start.
 
 End with a verdict: CONFORMANT or the shortest list of changes that would make it conformant.

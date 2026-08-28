@@ -24,6 +24,8 @@ Write versions and names as found in the repository, not as stated in the PRD. W
 
 Agent behaviour, and the only file the pipeline reads for configuration. pi loads it natively from the project directory and its ancestors, so it doubles as the standing instruction file.
 
+pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD` — first hit wins, walked from cwd through every ancestor. **`AGENTS.override.md` therefore replaces `AGENTS.md` in every child `pi -p` process.** The harness still routes from `AGENTS.md` (or `AGENTS_FILE`). If both files exist, reviewers follow different standing instructions than the script. The reference script warns at start when `AGENTS.override.md` is present. Reviewer processes also pass `-nc` so they do not load project context files at all; that is what keeps panel size and the implementer model out of the review prompt (`prompt-builders.md`).
+
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable config block**.
 
 The config block holds `models:`, `budgets:`, and `review:` exactly as specified in `contract.md`. Fence it as `yaml pipeline-contract` so an example block above it cannot become the routing. Keep it in one fenced YAML block so it can be extracted without parsing prose around it.
@@ -51,9 +53,15 @@ Living status. The only file that changes on nearly every run.
 
 Sections: completed work · key decisions with dates and rationale · open blockers · next steps · drift notes.
 
-Blockers are load-bearing. An aborted issue writes its blocker here, and issue creation reads it back, so a failed issue is not picked up naively on the next run. A blocker entry names the issue, the attempt count reached, and the findings that were never resolved.
+Blockers are load-bearing. An aborted issue writes its blocker here. The state file already skips `blocked` / `done` issues; that is the "do not pick it up naively" effect. The *content* — the findings — is fed back into the research and implement prompts for that issue (last `BLOCKER_HISTORY_MAX` entries, default 5). A blocker entry names the issue, the attempt count reached, and the findings that were never resolved.
 
 When history grows unwieldy, archive completed phases to `memory/completed-phases.md` and leave a pointer. Do not let `MEMORY.md` become a changelog — it is a status file, and every line should still be relevant.
+
+### Drift notes (this package)
+
+- PRD acceptance criterion 6 ("lauffähige Pipelines für mindestens zwei Harnesses") is unmet: the package ships one pi script. The adapter layer from R15 exists only as description.
+- `max_split_depth` is validated strictly, but the bundled script never splits. PRD §4.4 and the open decision on budget inheritance are a dead contract until a generator implements splitting.
+- There is no eval suite that an agent following this skill produces a conformant pipeline. `/pipeline-audit` exists because of that gap. `tests/smoke.sh` covers the bundled assets, not generation.
 
 ## Audit mode
 

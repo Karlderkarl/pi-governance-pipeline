@@ -48,10 +48,13 @@ The package also ships `pipeline-guard`, an extension that blocks privileged bas
 |---|---|
 | `PIPELINE_ALLOW_DESTRUCTIVE=1` | Unlocks `sudo`, recursive `rm`, and force-push that stay blocked even after `--unattended` |
 | `PIPELINE_LIB` | Override the copied `gate.mjs` / `governance.mjs` directory |
-| `MIN_REVIEWERS` | Floor of parseable reviewers; below it the gate blocks. Not a performance cap |
+| `MIN_REVIEWERS` | Floor of parseable reviewers; below it the gate blocks. Two consecutive attempts below the floor abort as a configuration error. Not a performance cap |
 | `PIPELINE_ALLOW_DEEP_SPLIT` | Accepts `max_split_depth > 1`; without it that budget is a contract error |
-| `GOVERNANCE_AGENTS` / `AGENTS_FILE` | Contract file for `state` commands vs the script |
+| `GOVERNANCE_AGENTS` / `AGENTS_FILE` | Contract file for `state` commands vs the script. Every `state` invocation in the reference script sets `GOVERNANCE_AGENTS` |
 | `REVIEWERS_MAX_BYTES` | Cap on concatenated reviewer JSON in controller/master prompts |
+| `ROLE_TIMEOUT_SECONDS` | Cap around each `pi -p` (GNU `timeout`, else `gtimeout`, else unprotected). `0` disables. A timeout empties the outfile so the role is unavailable |
+| `PROMPT_KEEP_RUNS` | Distinct run-ids to keep under `.pipeline/prompts/`; older prompt files are deleted |
+| `BLOCKER_HISTORY_MAX` | Last N `MEMORY.md` blocker entries for the current issue, fed into research and implement prompts |
 
 **`eval` is the issue source.** `ISSUE_SOURCE=!command`, `LINT_CMD`, and `TEST_CMD` run through `eval` and are all env-overridable. That is deliberate (one-line adaptation to `gh` or Jira) — it also means the run's environment is a shell, with or without `pipeline-guard`.
 
@@ -97,12 +100,18 @@ The generated pipeline runs this loop per issue:
 ```
 research ─▶ implement/TDD ─▶ deterministic gates (lint, tests) ─▶ 3 parallel reviews
    ─▶ controller (aggregates, proposes) ─▶ master review (decides, always runs)
-        ├─ approved  ─▶ governance update ─▶ next issue
-        ├─ rejected  ─▶ back to implement  (max 3, then blocked — splitting is a
-        │                                     generator's adaptation point; the
-        │                                     bundled reference blocks instead)
-        └─ 3x failed at master ─▶ abort: mark blocked, write blocker to MEMORY.md, notify human
+        ├─ approved   ─▶ governance update ─▶ next issue
+        ├─ rejected   ─▶ back to implement; after max_attempts_controller the
+        │                 next attempt is implement_master (not a block).
+        │                 Splitting is a generator adaptation point; the bundled
+        │                 reference never splits.
+        ├─ take_over  ─▶ stash the tree, drop cached research, implement_master
+        │                 starts fresh from the issue with findings as exclusions
+        └─ max_attempts_master exhausted ─▶ abort: mark blocked, write blocker
+                                            to MEMORY.md, notify human
 ```
+
+Two consecutive attempts with fewer parseable reviewers than `MIN_REVIEWERS` abort as a **configuration error** before controller and master of the second attempt — that is a broken panel, not a quality signal.
 
 ## Non-negotiable invariants
 
@@ -136,8 +145,10 @@ Two constraints the generated script must enforce:
 Invoke a role like this, reading `MODEL` from the mapping. Feed the prompt on stdin — interpolating it onto argv exceeds macOS `ARG_MAX` once the master sees the diff plus every reviewer JSON. Pass `--approve` only after the startup gate has set `PIPELINE_UNATTENDED=1`; it trusts every project-local resource, not only the guard.
 
 ```bash
-pi_args=(-p)
+pi_args=(-p --no-session)
 [[ "${PIPELINE_UNATTENDED:-}" == 1 ]] && pi_args+=(--approve)
+# review.*: -nc -t read,grep,find,ls   (AGENTS.md must not leak panel size)
+# controller / master_review: --no-tools  (the diff is inline after per-file truncation)
 if [[ "$MODEL" == "default" ]]; then
   pi "${pi_args[@]}" < "$ppath"
 else
@@ -151,8 +162,14 @@ Verify the exact flag names against `pi --help` for the installed version before
 
 ## Escalation and abort
 
-Research notes are cached per issue in the work directory and never regenerated. A bad first research pass sticks for every later attempt; delete the file to force a rerun.
+Research notes are cached per issue in the work directory. A bad first research pass sticks for later *repair* attempts; `take_over` deletes `research.md` so the escalated model gathers context again instead of inheriting the failed approach.
 
-When the master implements a fix itself, it starts **fresh from the issue** with prior findings as an exclusion list — not from the failed diff. Inheriting the broken diff inherits the reasoning that already failed three times; a different model is only useful if it gets to think differently.
+When the master implements a fix itself, it starts **fresh from the issue** with prior findings as an exclusion list — not from the failed diff. Inheriting the broken diff inherits the reasoning that already failed three times; a different model is only useful if it gets to think differently. Blocking findings are stored separately from lint/test output and are never displaced by a chatty linter; they are rewritten as prose (file + title/rationale, no line numbers) because `implement_master` does not receive the diff.
 
-An abort is never silent: mark the issue blocked, write the blocker to `MEMORY.md`, notify a human. `MEMORY.md` feeds back into issue creation, so the next run knows this issue has a history instead of picking it up naively.
+An abort is never silent: mark the issue blocked, write the blocker to `MEMORY.md`, notify a human. The next research and implement prompts for that issue receive the last N blocker entries from `MEMORY.md`. The state file already skips `blocked` issues; the MEMORY excerpt is the *content* of the history, not the skip itself.
+
+`.pipeline/` holds plaintext diffs and prompts and **must be gitignored**. The script warns at start if it is not, and prunes `.pipeline/prompts/` down to `PROMPT_KEEP_RUNS` distinct run ids.
+
+`--max-runs <n>` is an optional **invocation** cap across issues (not a PRD field; `max_runs_per_tree` remains per issue). Default off.
+
+Do not call `pi auth check --model <id>` as a startup gate: ids such as `google/gemini-2.5-flash` are often openrouter models, and `auth check` would treat `google/` as a native provider and abort a healthy run. Credential preflight is warn-only.
