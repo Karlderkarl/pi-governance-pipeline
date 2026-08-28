@@ -173,6 +173,52 @@ node "$LIB/governance.mjs" config "$TMP/two-unmarked.md" 2>"$TMP/two-unmarked.er
 grep -q "2 YAML blocks" "$TMP/two-unmarked.err" \
   || fail "multiple unmarked contract blocks produced no warning"
 
+# P0.1: unknown keys warn, never refuse — v2 forward-compat.
+cat > "$TMP/typos.md" <<'MD'
+# A
+```yaml pipeline-contract
+models:
+  implement:         { provider: anthropic, model: impl }
+  implement_msater:  { provider: google,    model: master-impl }
+  implement_master:  { provider: google,    model: master-impl }
+  review:
+    security:        { provider: google,    model: r1 }
+    quality:         { provider: openai,    model: r2 }
+    correctness:     { provider: anthropic, model: r3 }
+    securty:         { provider: openai,    model: r2 }
+budgets:
+  max_atempts_controller: 99
+  max_attempts_controller: 3
+  max_attempts_master: 3
+  max_runs_per_tree: 25
+```
+MD
+rc=0; node "$LIB/governance.mjs" config "$TMP/typos.md" >/dev/null 2>"$TMP/typos.err" || rc=$?
+[[ $rc -eq 0 ]] || fail "unknown contract keys must warn, not refuse (got $rc)"
+grep -q "implement_msater" "$TMP/typos.err" || fail "unknown models.implement_msater produced no warning"
+grep -q "securty" "$TMP/typos.err" || fail "unknown models.review.securty produced no warning"
+grep -q "max_atempts_controller" "$TMP/typos.err" || fail "unknown budgets.max_atempts_controller produced no warning"
+
+# P0.2: a fence that does not parse is an error, not silent defaults.
+cat > "$TMP/tilde-fence.md" <<'MD'
+# A
+~~~yaml pipeline-contract
+models:
+  implement: { provider: a, model: m }
+budgets:
+  max_runs_per_tree: 7
+~~~
+MD
+rc=0; node "$LIB/governance.mjs" config "$TMP/tilde-fence.md" >/dev/null 2>"$TMP/tilde.err" || rc=$?
+[[ $rc -eq 2 ]] || fail "~~~ pipeline-contract fence must be a contract error (got $rc)"
+grep -qi "no fenced YAML block parsed" "$TMP/tilde.err" || fail "unparsed contract must name the parse failure"
+printf '# A\n```yaml\nmodels:\n  implement: { provider: a, model: m }\n' > "$TMP/unclosed.md"
+rc=0; node "$LIB/governance.mjs" config "$TMP/unclosed.md" >/dev/null 2>"$TMP/unclosed.err" || rc=$?
+[[ $rc -eq 2 ]] || fail "unclosed yaml fence with models: must be a contract error (got $rc)"
+printf '# A\nno contract here, just prose\n' > "$TMP/plain-agents.md"
+node "$LIB/governance.mjs" config "$TMP/plain-agents.md" >/dev/null 2>"$TMP/plain.err" \
+  || fail "governance without a models:/budgets:/review: line must still default"
+
 # thinking: optional per role, launched as provider/model:level
 cat > "$TMP/think.md" <<'MD'
 # A
@@ -737,9 +783,11 @@ git -C "$proj5" init -q
 git -C "$proj5" -c user.email=t@t -c user.name=t commit -qm init --allow-empty
 dd if=/dev/zero bs=100000 count=1 2>/dev/null | tr '\0' 'x' > "$proj5/big.txt"
 out="$(cd "$proj5" && DIFF_MAX_BYTES=1024 bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run (cap case) failed: $out"
-grep -q "diff truncated at 1024 bytes" "$proj5/.pipeline/work/issue-5/diff.patch" \
-  || fail "oversized diff not truncated: $(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch") bytes"
-[[ "$(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch")" -lt 2048 ]] \
+grep -q "file truncated at" "$proj5/.pipeline/work/issue-5/diff.patch" \
+  || fail "oversized diff not truncated per file: $(head -c 200 "$proj5/.pipeline/work/issue-5/diff.patch")"
+grep -q "review diff manifest" "$proj5/.pipeline/work/issue-5/diff.patch" \
+  || fail "truncated diff missing the omitted-path manifest"
+[[ "$(wc -c < "$proj5/.pipeline/work/issue-5/diff.patch")" -lt 4096 ]] \
   || fail "truncated diff still too large"
 
 # ---------------------------------------------------------------- reviewers cap
@@ -1248,5 +1296,310 @@ out="$(cd "$proj_take" && PATH="$stub_take:$PATH" bash auto-develop.sh 2>&1)" ||
 [[ "$rc" -eq 0 ]] || fail "improved retry was not taken (rc=$rc): $out"
 echo "$out" | grep -q "retry taken" || fail "improved retry was not reported taken: $out"
 echo "$out" | grep -q "^approved: issue-take" || fail "improved retry did not let the issue approve: $out"
+
+# ---------------------------------------------------------------- P0.3 warning dedup
+# state validates on every call; the text must not repeat 18 times per issue.
+GOVERNANCE_AGENTS="$TMP/nomodels.md" node "$LIB/governance.mjs" state init "$TMP/proj-dedup" root-d >/dev/null 2>"$TMP/dedup1.err" \
+  || fail "state init for warning-dedup failed"
+warn1="$(grep -cE '^(contract warning|warning):' "$TMP/dedup1.err" || true)"
+[[ "$warn1" -ge 1 ]] || fail "first state call produced no contract warning"
+GOVERNANCE_AGENTS="$TMP/nomodels.md" node "$LIB/governance.mjs" state attempts "$TMP/proj-dedup" root-d root-d >/dev/null 2>"$TMP/dedup2.err" \
+  || fail "state attempts for warning-dedup failed"
+if grep -qE '^(contract warning|warning):' "$TMP/dedup2.err"; then
+  fail "state warnings repeated after the first call: $(cat "$TMP/dedup2.err")"
+fi
+# Errors stay loud even after the fingerprint is written.
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: twenty\n```\n' > "$TMP/twenty-later.md"
+rc=0; GOVERNANCE_AGENTS="$TMP/twenty-later.md" node "$LIB/governance.mjs" state budget "$TMP/proj-dedup" root-d >/dev/null 2>"$TMP/dedup-err.err" || rc=$?
+[[ $rc -eq 2 ]] || fail "contract errors must still fail after warning dedup (got $rc)"
+grep -q "contract error" "$TMP/dedup-err.err" || fail "contract errors must still print after warning dedup"
+
+# ---------------------------------------------------------------- P0.4 GOVERNANCE_AGENTS on attempts + budget
+grep -n 'state attempts' "$SH" | grep -q GOVERNANCE_AGENTS \
+  || fail "state attempts is missing GOVERNANCE_AGENTS"
+grep -n 'state budget' "$SH" | grep -q GOVERNANCE_AGENTS \
+  || fail "state budget is missing GOVERNANCE_AGENTS"
+proj_ga="$TMP/run-ga"; mkdir -p "$proj_ga/.pipeline/lib"
+cp "$SH" "$proj_ga/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_ga/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_ga/good-agents.md"
+printf '# A\n```yaml\nbudgets:\n  max_runs_per_tree: twenty\n```\n' > "$proj_ga/AGENTS.md"
+printf -- "- [ ] issue-ga: agents file override\n" > "$proj_ga/tasks.md"
+git_init "$proj_ga"
+rc=0
+out="$(cd "$proj_ga" && PATH="$stub_ok:$PATH" AGENTS_FILE="$proj_ga/good-agents.md" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "AGENTS_FILE override died on cwd AGENTS.md (rc=$rc): $out"
+echo "$out" | grep -q "^approved: issue-ga" || fail "AGENTS_FILE override did not approve: $out"
+
+# ---------------------------------------------------------------- P1.1 config abort ~17 calls, not 55
+proj_p11="$TMP/run-p11"; mkdir -p "$proj_p11/.pipeline/lib"
+cp "$SH" "$proj_p11/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_p11/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_p11/AGENTS.md"
+printf -- "- [ ] issue-p11: never-json reviewers\n" > "$proj_p11/tasks.md"
+git_init "$proj_p11"
+stub_p11="$TMP/stub-p11"; mkdir -p "$stub_p11"
+cat > "$stub_p11/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+log() { [[ -n "${PI_CALLS_LOG:-}" ]] && printf '%s\n' "$1" >> "$PI_CALLS_LOG" || true; }
+case "$last" in
+  "Gather context"*) log research; echo "research notes" ;;
+  "Implement this issue"*) log implement; printf 'implemented\n' >> ./impl.txt ;;
+  *"REMINDER"*|"You review a diff for one concern only:"*) log review; echo 'not json at all' ;;
+  "Merge these reviewer"*) log controller; echo '{}' ;;
+  "Decide this attempt"*) log master; echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) log unknown; echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_p11/pi"
+rc=0
+out="$(cd "$proj_p11" && PATH="$stub_p11:$PATH" PI_CALLS_LOG="$TMP/calls-p11.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "never-json reviewers should block, not approve"
+echo "$out" | grep -qi "Configuration error" || fail "panel-short abort must name a configuration error: $out"
+grep -qi "Configuration error" "$proj_p11/MEMORY.md" || fail "configuration error was not written to MEMORY.md"
+calls_p11="$(grep -cE '^(research|implement|review|controller|master)$' "$TMP/calls-p11.log" || true)"
+[[ "$calls_p11" -le 20 ]] || fail "never-json run still burned the tree ($calls_p11 calls): $(cat "$TMP/calls-p11.log")"
+[[ "$calls_p11" -ge 15 ]] || fail "never-json run ended too early ($calls_p11 calls): $(cat "$TMP/calls-p11.log")"
+echo "P1.1 never-json run: $calls_p11 model calls"
+# controller+master of the second attempt must not have run
+[[ "$(grep -c '^controller$' "$TMP/calls-p11.log")" -eq 1 ]] \
+  || fail "second-attempt controller still ran: $(cat "$TMP/calls-p11.log")"
+[[ "$(grep -c '^master$' "$TMP/calls-p11.log")" -eq 1 ]] \
+  || fail "second-attempt master still ran: $(cat "$TMP/calls-p11.log")"
+
+# ---------------------------------------------------------------- P1.2 role timeout wrapper
+grep -q 'ROLE_TIMEOUT_SECONDS' "$SH" || fail "ROLE_TIMEOUT_SECONDS missing"
+grep -q 'gtimeout' "$SH" || fail "timeout fallback (gtimeout) missing"
+grep -q 'status == 124' "$SH" || fail "timeout must empty the outfile (exit 124)"
+proj_toj="$TMP/run-timeout"; mkdir -p "$proj_toj/.pipeline/lib"
+cp "$SH" "$proj_toj/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_toj/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_toj/AGENTS.md"
+printf -- "- [ ] issue-timeout: timeout wrapper\n" > "$proj_toj/tasks.md"
+git_init "$proj_toj"
+wrap="$TMP/timeout-wrap"; mkdir -p "$wrap"
+cat > "$wrap/timeout" <<'EOF'
+#!/usr/bin/env bash
+# Pretend to be GNU timeout: --version for detection, otherwise exec the rest.
+if [[ "$1" == --version ]]; then echo "timeout 8.32"; exit 0; fi
+echo "timeout-wrapper $*" >> "${TIMEOUT_LOG:?}"
+shift  # drop the seconds
+exec "$@"
+EOF
+chmod +x "$wrap/timeout"
+rc=0
+out="$(cd "$proj_toj" && PATH="$wrap:$stub_ok:$PATH" ROLE_TIMEOUT_SECONDS=30 TIMEOUT_LOG="$TMP/timeout.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "timeout-wrapper run failed (rc=$rc): $out"
+grep -q 'timeout-wrapper 30' "$TMP/timeout.log" || fail "pi was not launched under timeout: $(cat "$TMP/timeout.log" 2>/dev/null)"
+
+# ---------------------------------------------------------------- P1.3 credential preflight must not auth-check model ids
+if grep -E '^[^#]*auth check --model' "$SH" >/dev/null; then
+  fail "preflight must not call pi auth check --model (openrouter google/ ids abort healthy runs)"
+fi
+grep -q 'openrouter' "$SH" || fail "the openrouter auth-check trap is not documented in the script"
+
+# ---------------------------------------------------------------- P2.1 MEMORY.md feeds implement + research
+proj_memr="$TMP/run-memr"; mkdir -p "$proj_memr/.pipeline/lib"
+cp "$SH" "$proj_memr/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_memr/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_memr/AGENTS.md"
+printf -- "- [ ] issue-memr: read blockers\n" > "$proj_memr/tasks.md"
+{
+  echo "## Blocker — issue-memr (2026-01-01)"
+  echo ""
+  echo "prior-blocker-token: do not repeat the hash map"
+} > "$proj_memr/MEMORY.md"
+git_init "$proj_memr"
+rc=0
+out="$(cd "$proj_memr" && PATH="$stub_ok:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "memory-read run failed (rc=$rc): $out"
+grep -rq "prior-blocker-token" "$proj_memr/.pipeline/prompts" \
+  || fail "MEMORY.md blocker never reached a prompt"
+grep -ql "prior-blocker-token" "$proj_memr"/.pipeline/prompts/issue-memr/issue-memr-research* \
+  || fail "research prompt missing blocker history"
+grep -ql "prior-blocker-token" "$proj_memr"/.pipeline/prompts/issue-memr/issue-memr-implement* \
+  || fail "implement prompt missing blocker history"
+
+# ---------------------------------------------------------------- P2.2 blocking findings survive a 300-line lint
+proj_p22="$TMP/run-p22"; mkdir -p "$proj_p22/.pipeline/lib"
+cp "$SH" "$proj_p22/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_p22/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_p22/AGENTS.md"
+printf -- "- [ ] issue-p22: keep critical\n" > "$proj_p22/tasks.md"
+git_init "$proj_p22"
+stub_p22="$TMP/stub-p22"; mkdir -p "$stub_p22"
+cat > "$stub_p22/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only: security"*)
+    echo '{"role":"security","verdict":"reject","findings":[{"severity":"critical","file":"a.ts","line":12,"title":"RCE-keep-me","rationale":"eval of input","suggestion":"do not eval"}]}' ;;
+  "You review a diff for one concern only:"*)
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"reject","reasons":["critical"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_p22/pi"
+lint_p22='$proj_p22/.pipeline/work/issue-p22/.lint-n'
+# First attempt: lint passes so the critical can be recorded. Later: 300 lines.
+rc=0
+out="$(cd "$proj_p22" && PATH="$stub_p22:$PATH" \
+  LINT_CMD='nfile=.pipeline/work/issue-p22/.lint-n; n=0; [ -f "$nfile" ] && n=$(cat "$nfile"); n=$((n+1)); mkdir -p "$(dirname "$nfile")"; echo $n > "$nfile"; if [ "$n" -eq 1 ]; then echo lint-ok; else i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo "lint-line-$i"; done; false; fi' \
+  bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "p22 should not approve: $out"
+third="$(ls "$proj_p22"/.pipeline/prompts/issue-p22/issue-p22-implement-a03-* 2>/dev/null | head -1)"
+[[ -n "$third" ]] || fail "third implement prompt missing: $out"
+grep -q "RCE-keep-me" "$third" || fail "critical from attempt 1 was displaced by lint output"
+if grep -q 'line":12' "$third"; then fail "findings still carry line numbers into the implement prompt"; fi
+
+# ---------------------------------------------------------------- P3.1 omitted paths named in the reviewer prompt
+proj_omit="$TMP/run-omit"; mkdir -p "$proj_omit/.pipeline/lib"
+cp "$SH" "$proj_omit/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_omit/.pipeline/lib/"
+printf -- "- [ ] issue-omit: named omissions\n" > "$proj_omit/tasks.md"
+git -C "$proj_omit" init -q
+git -C "$proj_omit" -c user.email=t@t -c user.name=t commit -qm init --allow-empty
+dd if=/dev/zero bs=8000 count=1 2>/dev/null | tr '\0' 'A' > "$proj_omit/keep-me.test.ts"
+dd if=/dev/zero bs=8000 count=1 2>/dev/null | tr '\0' 'B' > "$proj_omit/big-a.txt"
+dd if=/dev/zero bs=8000 count=1 2>/dev/null | tr '\0' 'C' > "$proj_omit/big-b.txt"
+out="$(cd "$proj_omit" && DIFF_MAX_BYTES=2048 bash auto-develop.sh --dry-run 2>&1)" || fail "omit dry-run failed: $out"
+rev_prompt="$(ls "$proj_omit"/.pipeline/prompts/issue-omit/issue-omit-review_* 2>/dev/null | head -1)"
+[[ -n "$rev_prompt" ]] || fail "reviewer prompt missing for omit case"
+grep -q "omitted:" "$rev_prompt" || fail "reviewer prompt has no omitted-path manifest"
+# At least one of the large files must be named as omitted or truncated.
+grep -Eq 'omitted:.*(big-a.txt|big-b.txt|keep-me.test.ts)|truncated:.*(big-a.txt|big-b.txt|keep-me.test.ts)' "$rev_prompt" \
+  || fail "reviewer prompt did not name a dropped/truncated path: $(grep -A3 'review diff manifest' "$rev_prompt")"
+# Untracked TDD file must not be the silent casualty: either included or named.
+grep -q "keep-me.test.ts" "$rev_prompt" || fail "TDD test file vanished from the reviewer prompt without being named"
+
+# ---------------------------------------------------------------- P3.2 role toolset flags
+grep -q -- '--no-session' "$SH" || fail "--no-session missing from run_role"
+grep -q -- '-nc' "$SH" || fail "reviewer -nc missing"
+grep -q 'read,grep,find,ls' "$SH" || fail "reviewer read-only toolset missing"
+grep -q -- '--no-tools' "$SH" || fail "controller/master --no-tools missing"
+proj_flags="$TMP/run-flags"; mkdir -p "$proj_flags/.pipeline/lib"
+cp "$SH" "$proj_flags/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_flags/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_flags/AGENTS.md"
+printf -- "- [ ] issue-flags: argv\n" > "$proj_flags/tasks.md"
+git_init "$proj_flags"
+stub_flags="$TMP/stub-flags"; mkdir -p "$stub_flags"
+cat > "$stub_flags/pi" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${PI_ARGV_LOG:?}"
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_flags/pi"
+rc=0
+out="$(cd "$proj_flags" && PATH="$stub_flags:$PATH" PI_ARGV_LOG="$TMP/argv-flags.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "flag run failed (rc=$rc): $out"
+grep -q -- '--no-session' "$TMP/argv-flags.log" || fail "pi was not launched with --no-session"
+grep -q -- '-nc' "$TMP/argv-flags.log" || fail "reviewer was not launched with -nc"
+grep -q -- '--no-tools' "$TMP/argv-flags.log" || fail "controller/master missing --no-tools"
+# Implementer must keep tools (bash) — no --no-tools on a line that is only -p --no-session.
+if grep -E -- '--no-tools' "$TMP/argv-flags.log" | grep -qvE -- '-nc|--no-tools'; then
+  :
+fi
+impl_lines="$(grep -c -- '-nc' "$TMP/argv-flags.log" || true)"
+[[ "$impl_lines" -ge 1 ]] || fail "no reviewer -nc invocations"
+
+# ---------------------------------------------------------------- P3.3 global --max-runs (extension, not a PRD field)
+proj_mr="$TMP/run-maxruns"; mkdir -p "$proj_mr/.pipeline/lib"
+cp "$SH" "$proj_mr/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_mr/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_mr/AGENTS.md"
+printf -- "- [ ] issue-mr-a: first\n- [ ] issue-mr-b: second\n" > "$proj_mr/tasks.md"
+git_init "$proj_mr"
+rc=0
+out="$(cd "$proj_mr" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-mr.log" bash auto-develop.sh --max-runs 1 2>&1)" || rc=$?
+echo "$out" | grep -q "max-runs" || fail "--max-runs produced no notice: $out"
+if echo "$out" | grep -q "^approved: issue-mr-b"; then fail "--max-runs 1 still finished the second issue"; fi
+
+# ---------------------------------------------------------------- P3.4 take_over regenerates research
+proj_resx="$TMP/run-re-research"; mkdir -p "$proj_resx/.pipeline/lib"
+cp "$SH" "$proj_resx/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_resx/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_resx/AGENTS.md"
+printf -- "- [ ] issue-rr: retake research\n" > "$proj_resx/tasks.md"
+git_init "$proj_resx"
+stub_rr="$TMP/stub-rr"; mkdir -p "$stub_rr"
+cat > "$stub_rr/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+log() { [[ -n "${PI_CALLS_LOG:-}" ]] && printf '%s\n' "$1" >> "$PI_CALLS_LOG" || true; }
+case "$last" in
+  "Gather context"*) log research; echo "research notes" ;;
+  "Implement this issue"*) log implement; printf 'from-x\n' >> ./impl.txt ;;
+  "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*)
+    if [[ -f .pipeline/work/issue-rr/.took-over ]]; then
+      echo '{"decision":"approve","reasons":["fresh"]}'
+    else
+      mkdir -p .pipeline/work/issue-rr
+      touch .pipeline/work/issue-rr/.took-over
+      echo '{"decision":"take_over","reasons":["wrong approach"]}'
+    fi ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_rr/pi"
+rc=0
+out="$(cd "$proj_resx" && PATH="$stub_rr:$PATH" PI_CALLS_LOG="$TMP/calls-rr.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "take_over research rerun failed (rc=$rc): $out"
+[[ "$(grep -c '^research$' "$TMP/calls-rr.log")" -eq 2 ]] \
+  || fail "take_over did not regenerate research: $(cat "$TMP/calls-rr.log")"
+
+# ---------------------------------------------------------------- P3.5 findings in prose, no line numbers
+grep -q 'findings_to_prose' "$SH" || fail "findings_to_prose helper missing"
+
+# ---------------------------------------------------------------- AGENTS.override.md warning + prompt retention + gitignore
+proj_ov="$TMP/run-override"; mkdir -p "$proj_ov/.pipeline/lib"
+cp "$SH" "$proj_ov/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_ov/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_ov/AGENTS.md"
+printf '# override\n' > "$proj_ov/AGENTS.override.md"
+printf -- "- [ ] issue-ov: override warn\n" > "$proj_ov/tasks.md"
+git_init "$proj_ov"
+out="$(cd "$proj_ov" && bash auto-develop.sh --dry-run 2>&1)" || fail "override dry-run failed: $out"
+echo "$out" | grep -q "AGENTS.override.md" || fail "existing AGENTS.override.md produced no warning"
+grep -q 'PROMPT_KEEP_RUNS' "$SH" || fail "prompt retention (PROMPT_KEEP_RUNS) missing"
+grep -q 'is not gitignored' "$SH" || fail "gitignore warning for .pipeline/ missing"
+
+# ---------------------------------------------------------------- docs: every point has coverage in the audit list / skill
+grep -q 'take_over' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md never names take_over / implement_master escalation"
+grep -q 'implement_master' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md diagram still omits the implement_master escalation edge"
+grep -q 'AGENTS.override.md' "$ROOT/skills/governance-pipeline/references/governance-files.md" \
+  || fail "governance-files.md does not mention AGENTS.override.md"
+grep -q 'gitignore' "$ROOT/skills/governance-pipeline/references/pipeline-template.md" \
+  || fail "pipeline-template.md must require gitignoring .pipeline/"
+if grep -q 'token usage where available' "$ROOT/skills/governance-pipeline/references/pipeline-template.md"; then
+  fail "pipeline-template.md still claims token usage the logger does not write"
+fi
+grep -q 'MEMORY.md' "$ROOT/prompts/pipeline-audit.md" \
+  || fail "pipeline-audit.md does not ask whether MEMORY.md feeds back"
+grep -q 'toolset' "$ROOT/prompts/pipeline-audit.md" \
+  || fail "pipeline-audit.md does not cover the role toolset"
+grep -q 'max-runs' "$ROOT/prompts/pipeline-audit.md" \
+  || fail "pipeline-audit.md does not cover the global cap"
+grep -q 'preflight' "$ROOT/prompts/pipeline-audit.md" \
+  || fail "pipeline-audit.md does not cover credential preflight"
+grep -q 'unknown contract key' "$ROOT/skills/governance-pipeline/references/contract.md" \
+  || fail "contract.md validation list missing unknown-key warnings"
+grep -q 'no fenced YAML block parsed' "$ROOT/skills/governance-pipeline/references/contract.md" \
+  || fail "contract.md missing the unparsed-block error"
 
 echo "smoke OK"
