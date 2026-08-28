@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.12
+pi install npm:pi-governance-pipeline@1.0.13
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.12
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.13
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.12
+pi -e npm:pi-governance-pipeline@1.0.13
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.12
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.13
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -191,10 +191,13 @@ rarely need changing:
 
 | Variable | Default | Effect |
 |---|---|---|
-| `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; larger diffs are truncated and say so |
+| `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; truncation is per file, omitted paths are named in a manifest |
 | `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and says so |
-| `EXCLUSIONS_MAX_LINES` | `200` | Cap on prior findings re-entering the implement prompt; the newest blocks survive, the oldest are omitted |
-| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving. A value that is not an integer ≥ 1 is fatal (`die`), not reset — unlike the byte caps above. `--help` still prints because the check runs after flag parsing. `gate.mjs --min-reviewers` likewise refuses anything that is not an integer ≥ 1 |
+| `EXCLUSIONS_MAX_LINES` | `200` | Cap on lint/test output re-entering the implement prompt; gate findings live separately and are never displaced |
+| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving. Two consecutive attempts below the floor abort as a configuration error. A value that is not an integer ≥ 1 is fatal (`die`), not reset — unlike the byte caps above. `--help` still prints because the check runs after flag parsing. `gate.mjs --min-reviewers` likewise refuses anything that is not an integer ≥ 1 |
+| `ROLE_TIMEOUT_SECONDS` | `0` | Cap around each `pi -p`. GNU `timeout`, else `gtimeout`, else unprotected. `0` disables. Exit 124 empties the outfile |
+| `PROMPT_KEEP_RUNS` | `3` | Distinct run ids kept under `.pipeline/prompts/`; older files are deleted |
+| `BLOCKER_HISTORY_MAX` | `5` | Last N `MEMORY.md` blocker entries fed into research and implement prompts |
 
 ## Releasing (maintainers)
 
