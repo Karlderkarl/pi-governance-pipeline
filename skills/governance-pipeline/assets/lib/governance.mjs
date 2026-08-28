@@ -36,6 +36,17 @@ const DEFAULTS = {
 
 const ROLES = ["research", "implement", "implement_master", "controller", "master_review"];
 const REVIEWERS = ["security", "quality", "correctness"];
+const KNOWN_TOP = new Set(["models", "budgets", "review"]);
+const KNOWN_MODEL_KEYS = new Set([...ROLES, "review", "constraints"]);
+const KNOWN_REVIEWERS = new Set(REVIEWERS);
+const KNOWN_CONSTRAINTS = new Set(["no_self_review"]);
+const KNOWN_BUDGETS = new Set([
+	"max_attempts_controller",
+	"max_attempts_master",
+	"max_runs_per_tree",
+	"max_split_depth",
+]);
+const KNOWN_REVIEW_GATE = new Set(["blocking_severities", "followup_severities"]);
 // pi --model <pattern> accepts an optional :<thinking> suffix; these are the
 // levels from pi's --thinking flag. Identity comparisons strip this suffix.
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -141,6 +152,32 @@ function splitTopLevel(text) {
 	return parts;
 }
 
+function looksLikeContractIntent(text) {
+	if (text.includes("pipeline-contract")) return true;
+	return /^[ \t]*(models|budgets|review)[ \t]*:/m.test(text);
+}
+
+function warnUnknownKeys(parsed, warnings) {
+	if (!parsed || typeof parsed !== "object") return;
+	const note = "ignored — unknown keys stay warnings so v2 fields remain forward-compatible";
+	const walk = (obj, known, prefix) => {
+		if (!obj || typeof obj !== "object" || Array.isArray(obj)) return;
+		for (const key of Object.keys(obj)) {
+			if (!known.has(key)) {
+				warnings.push(`unknown contract key \`${prefix}${key}\`; ${note}`);
+			}
+		}
+	};
+	walk(parsed, KNOWN_TOP, "");
+	if (parsed.models && typeof parsed.models === "object") {
+		walk(parsed.models, KNOWN_MODEL_KEYS, "models.");
+		walk(parsed.models.review, KNOWN_REVIEWERS, "models.review.");
+		walk(parsed.models.constraints, KNOWN_CONSTRAINTS, "models.constraints.");
+	}
+	walk(parsed.budgets, KNOWN_BUDGETS, "budgets.");
+	walk(parsed.review, KNOWN_REVIEW_GATE, "review.");
+}
+
 /* ------------------------------------------------------------ config layer */
 
 // Prefer a fence marked `yaml pipeline-contract`. Otherwise the first fenced
@@ -177,12 +214,21 @@ export function readConfig(agentsPath) {
 		}
 	}
 	if (!block) {
+		// A fence that never closed, or a ~~~ fence, still contains the keys.
+		// That is an author who tried to set a contract, not absence. Absence
+		// is the documented default path and must stay a warning.
+		if (looksLikeContractIntent(text)) {
+			throw contractError(
+				"AGENTS.md looks like it contains a pipeline contract (pipeline-contract, or a models:/budgets:/review: line) but no fenced YAML block parsed; refusing to run on defaults that would silently drop the configured budgets and models",
+			);
+		}
 		warnings.push(
 			"no contract config block in AGENTS.md; defaults apply to every field — no_self_review cannot fire, so three reviewers are one model",
 		);
 		return { config: withDefaults({}), warnings, hadModelsBlock: false, noSelfReviewExplicit: false };
 	}
 	const parsed = parseYamlSubset(block);
+	warnUnknownKeys(parsed, warnings);
 	const noSelfReviewExplicit = parsed.models?.constraints?.no_self_review === true;
 	// Defaulted no_self_review still degrades here (compat). The concrete
 	// effect: implement and all three reviewers share the session default,
@@ -539,9 +585,26 @@ function usage() {
 	process.exit(1);
 }
 
-function emitValidation(config, source = {}) {
+function emitValidation(config, source = {}, opts = {}) {
 	const { errors, warnings } = validate(config, source);
-	for (const w of warnings) process.stderr.write(`contract warning: ${w}\n`);
+	const extra = opts.extraWarnings ?? [];
+	const allWarnings = [...extra, ...warnings];
+	let toPrint = allWarnings;
+	const dir = opts.dedupDir;
+	if (dir) {
+		mkdirSync(dir, { recursive: true });
+		const marker = join(dir, ".contract-warning-fingerprint");
+		const fingerprint = `${allWarnings.join("\n")}\n`;
+		if (existsSync(marker) && readFileSync(marker, "utf8") === fingerprint) {
+			toPrint = [];
+		} else {
+			writeFileSync(marker, fingerprint);
+		}
+	}
+	for (const w of toPrint) {
+		const tagged = w.startsWith("contract warning:") || w.startsWith("warning:") ? w : `contract warning: ${w}`;
+		process.stderr.write(`${tagged}\n`);
+	}
 	if (errors.length > 0) {
 		for (const e of errors) process.stderr.write(`contract error: ${e}\n`);
 		process.exit(2);
@@ -580,8 +643,11 @@ function main(argv) {
 		const { config, warnings, hadModelsBlock, noSelfReviewExplicit } = readConfig(
 			process.env.GOVERNANCE_AGENTS ?? "AGENTS.md",
 		);
-		for (const w of warnings) process.stderr.write(`warning: ${w}\n`);
-		emitValidation(config, { hadModelsBlock, noSelfReviewExplicit });
+		const dedupDir = args[1];
+		emitValidation(config, { hadModelsBlock, noSelfReviewExplicit }, {
+			extraWarnings: warnings.map((w) => (w.startsWith("warning:") ? w : `warning: ${w}`)),
+			dedupDir,
+		});
 		const result = stateCommand(args, config);
 		if (result) process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 		return;
