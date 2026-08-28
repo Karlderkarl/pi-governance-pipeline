@@ -11,6 +11,7 @@
 #   ./auto-develop.sh --issue issue-42
 #   ./auto-develop.sh --unattended --yes
 #   ./auto-develop.sh --auto-merge --yes   # stub — does not merge
+#   ./auto-develop.sh --max-runs 10        # optional global cap across issues
 
 set -euo pipefail
 
@@ -35,16 +36,28 @@ REVIEWERS_MAX_BYTES="${REVIEWERS_MAX_BYTES:-65536}"
 [[ "$REVIEWERS_MAX_BYTES" =~ ^[0-9]+$ ]] || REVIEWERS_MAX_BYTES=65536
 # exclusions.md grows by one block per failed gate and per rejected attempt;
 # cap what re-enters the implement prompt, or a chatty linter inflates it
-# exponentially over the attempt tree.
+# exponentially over the attempt tree. Gate findings live in findings.md and
+# are never displaced by this cap.
 EXCLUSIONS_MAX_LINES="${EXCLUSIONS_MAX_LINES:-200}"
 [[ "$EXCLUSIONS_MAX_LINES" =~ ^[0-9]+$ ]] || EXCLUSIONS_MAX_LINES=200
+# Blocker entries from MEMORY.md re-enter research/implement prompts.
+BLOCKER_HISTORY_MAX="${BLOCKER_HISTORY_MAX:-5}"
+[[ "$BLOCKER_HISTORY_MAX" =~ ^[0-9]+$ ]] || BLOCKER_HISTORY_MAX=5
+# Prompt archive under .pipeline/prompts: keep this many distinct run ids.
+PROMPT_KEEP_RUNS="${PROMPT_KEEP_RUNS:-3}"
+[[ "$PROMPT_KEEP_RUNS" =~ ^[1-9][0-9]*$ ]] || PROMPT_KEEP_RUNS=3
+# Seconds around each pi -p. 0 = no timeout. GNU timeout, else gtimeout,
+# else run unprotected (macOS without coreutils).
+ROLE_TIMEOUT_SECONDS="${ROLE_TIMEOUT_SECONDS:-0}"
+[[ "$ROLE_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || ROLE_TIMEOUT_SECONDS=0
 # The contract promises independent reviewers; no_self_review drops and
 # unparseable output can shrink the panel at run time. Below this floor no
 # independent check is left, and the gate must block instead of approving.
 MIN_REVIEWERS="${MIN_REVIEWERS:-2}"
 
-UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""
+UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""; MAX_RUNS=""
 FAILED_ISSUES=()
+GLOBAL_RUNS=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,7 +66,8 @@ while [[ $# -gt 0 ]]; do
     --dry-run)    DRY_RUN=1 ;;
     --yes|-y)     ASSUME_YES=1 ;;
     --issue)      ONLY_ISSUE="${2:?--issue needs an id}"; shift ;;
-    -h|--help)    sed -n '2,13p' "$SELF"; exit 0 ;;
+    --max-runs)   MAX_RUNS="${2:?--max-runs needs a count}"; shift ;;
+    -h|--help)    sed -n '2,15p' "$SELF"; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
@@ -65,6 +79,9 @@ die() { echo "error: $*" >&2; exit 1; }
 # floor of the review panel. `^[0-9]+$` let a 0 through, which gate.mjs then
 # refused while the gate JSON still logged the 0.
 [[ "$MIN_REVIEWERS" =~ ^[1-9][0-9]*$ ]] || die "MIN_REVIEWERS must be an integer >= 1; got '$MIN_REVIEWERS'"
+if [[ -n "$MAX_RUNS" ]]; then
+  [[ "$MAX_RUNS" =~ ^[1-9][0-9]*$ ]] || die "--max-runs must be an integer >= 1; got '$MAX_RUNS'"
+fi
 
 # The flag is parsed and confirmed at the safety gate so an adapted script can
 # hook a real merge here. The reference implementation does not merge.
@@ -101,6 +118,15 @@ fi
 git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || die "auto-develop.sh requires a git repository"
 
+# pi loads the first hit of AGENTS.override.md, AGENTS.md, … from cwd and
+# ancestors. The harness still routes from AGENTS_FILE. If both exist, every
+# child process follows different instructions than the script.
+if [[ -f "$ROOT/AGENTS.override.md" ]]; then
+  echo "warning: AGENTS.override.md exists — pi loads it instead of AGENTS.md in every child process; routing still reads $AGENTS_FILE" >&2
+fi
+# Credential preflight is warn-only. Passing an AGENTS.md id to pi's auth
+# check treats the first path segment as a native provider; google/gemini-2.5-flash
+# is an openrouter id and would abort a healthy run. Never gate on that.
 CONFIG="$(node "$LIB/governance.mjs" config "$AGENTS_FILE")" || exit 2
 MODELS_JSON="$(node "$LIB/governance.mjs" models "$AGENTS_FILE")" || exit 2
 BLOCKING="$(node -e 'const c=JSON.parse(process.argv[1]);console.log(c.review.blocking_severities.join(","))' "$CONFIG")"
@@ -162,12 +188,34 @@ run_role() { # run_role <root> <issue> <role.path> <prompt> <outfile> [attempt-t
   local status=0
   # --approve trusts every project-local resource, not just pipeline-guard.
   # Only pass it after the startup gate has run (PIPELINE_UNATTENDED=1).
-  local pi_args=(-p)
+  # --no-session: one pi -p is one session file; a 55-call issue would otherwise
+  # leave 55 sessions. Reviewers get -nc so AGENTS.md cannot tell them the
+  # panel size or the implementer. Controller/master get --no-tools: the diff
+  # is inline after per-file truncation (P3.1), and "the rest is in the tree"
+  # is no longer an invitation to read it.
+  local pi_args=(-p --no-session)
   [[ "${PIPELINE_UNATTENDED:-}" == 1 ]] && pi_args+=(--approve)
+  case "$role" in
+    review.*) pi_args+=(-nc -t read,grep,find,ls) ;;
+    controller|master_review) pi_args+=(--no-tools) ;;
+  esac
+  local timeout_cmd=()
+  if (( ROLE_TIMEOUT_SECONDS > 0 )); then
+    if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+      timeout_cmd=(timeout "$ROLE_TIMEOUT_SECONDS")
+    elif command -v gtimeout >/dev/null 2>&1; then
+      timeout_cmd=(gtimeout "$ROLE_TIMEOUT_SECONDS")
+    fi
+  fi
   if [[ "$model" == "default" ]]; then
-    pi "${pi_args[@]}" < "$ppath" > "$out" || status=$?
+    "${timeout_cmd[@]+"${timeout_cmd[@]}"}" pi "${pi_args[@]}" < "$ppath" > "$out" || status=$?
   else
-    pi "${pi_args[@]}" --model "$model" < "$ppath" > "$out" || status=$?
+    "${timeout_cmd[@]+"${timeout_cmd[@]}"}" pi "${pi_args[@]}" --model "$model" < "$ppath" > "$out" || status=$?
+  fi
+  # GNU timeout exits 124. Empty the file so the existing unavailable path
+  # treats this as a role failure, not as partial JSON.
+  if (( status == 124 )); then
+    : > "$out"
   fi
   log_event "$root" "$issue" "$role" "$model" "$status" "$ppath"
   return $status
@@ -177,6 +225,52 @@ excerpt() { [[ -f "$1" ]] && sed -n "1,${2:-200}p" "$1" || true; }
 # Rank a --check exit: 0 (verdict) > 2 (findings only) > 1 (nothing). A worse
 # retry must not replace a file the gate could still use.
 rank_of() { case "$1" in 0) echo 2 ;; 2) echo 1 ;; *) echo 0 ;; esac; }
+
+# Last N MEMORY.md blocker entries for this issue. The state file already
+# skips blocked issues; this is the content the next implement/research pass
+# needs so it does not repeat the same failed approach blindly.
+blocker_history() { # <issue_id>
+  [[ -f "$MEMORY_FILE" ]] || return 0
+  node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1], issue = process.argv[2], max = Number(process.argv[3]) || 5;
+    if (!fs.existsSync(file) || max <= 0) process.exit(0);
+    const text = fs.readFileSync(file, "utf8");
+    const chunks = text.split(/^## /m);
+    const prefix = "Blocker — " + issue;
+    const hits = chunks.filter((c) => c === prefix || c.startsWith(prefix + " ") || c.startsWith(prefix + "(") || c.startsWith(prefix + "\n"));
+    const last = hits.slice(-max);
+    if (last.length === 0) process.exit(0);
+    process.stdout.write("Prior blockers for this issue (newest last):\n\n");
+    process.stdout.write(last.map((c) => "## " + c.trimEnd()).join("\n\n") + "\n");
+  ' "$MEMORY_FILE" "$1" "$BLOCKER_HISTORY_MAX"
+}
+
+# gate.json findings as prose: file + title/rationale, never line numbers.
+# implement_master does not receive the diff, so file:line is unresolvable.
+findings_to_prose() { # <gate.json>
+  [[ -f "$1" ]] || return 0
+  node -e '
+    const fs = require("node:fs");
+    let g;
+    try { g = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { process.exit(0); }
+    const items = [...(g.blocking || []), ...(g.followups || [])];
+    if (items.length === 0) process.exit(0);
+    const line = (f) => {
+      const where = f.file || "unknown file";
+      const title = f.title || "finding";
+      const why = f.rationale ? ` ${f.rationale}` : "";
+      const sug = f.suggestion ? ` Suggestion: ${f.suggestion}` : "";
+      return `- ${f.severity || "unknown"} in ${where} (${title}).${why}${sug}`;
+    };
+    if ((g.blocking || []).length) {
+      process.stdout.write("Blocking findings:\n" + (g.blocking || []).map(line).join("\n") + "\n");
+    }
+    if ((g.followups || []).length) {
+      process.stdout.write("Follow-up findings:\n" + (g.followups || []).map(line).join("\n") + "\n");
+    }
+  ' "$1"
+}
 
 # ------------------------------------------------------------------- prompts
 build_review_prompt() { # <focus> <issue> <difffile>
@@ -204,20 +298,23 @@ Emit ONLY this JSON, no prose and no code fence:
 EOF
 }
 
-build_implement_prompt() { # <issue> <researchfile> <exclusionfile> <attempts_left>
-  # tail, not head: the retry must fix the newest failure, not re-read the
-  # first. Above the cap, the oldest blocks are omitted and the prompt says so.
-  # The block is built before the heredoc so its surrounding blank lines can
-  # be conditional: ${excl:+...} expands to nothing when there are no prior
-  # findings — a trailing printf inside a heredoc $() would be stripped, and
-  # an unconditional blank line would stack in the empty case.
-  local excl=""
+build_implement_prompt() { # <issue> <researchfile> <exclusionfile> <attempts_left> [findingsfile] [issue_id]
+  # Gate findings (arg 5) are never displaced: they are why the retry exists.
+  # Tool output in exclusions.md is capped — a chatty linter must not push
+  # a critical finding out of the window. tail, not head, for the tool log.
+  local excl="" findings="" history=""
+  if [[ -n "${5:-}" && -s "$5" ]]; then
+    findings="$( printf 'Review findings from earlier attempts. Repeating any of them fails again:\n'; cat "$5" )"
+  fi
   if [[ -s "$3" ]]; then
-    excl="$( printf 'Previous attempts were rejected for these findings. Repeating any of them fails again:\n'
+    excl="$( printf 'Tool output from earlier attempts (lint/tests/empty diff):\n'
       if (( $(wc -l < "$3") > EXCLUSIONS_MAX_LINES )); then
         printf '[older blocks omitted — newest %s lines kept]\n' "$EXCLUSIONS_MAX_LINES"
       fi
       tail -n "$EXCLUSIONS_MAX_LINES" "$3" )"
+  fi
+  if [[ -n "${6:-}" ]]; then
+    history="$(blocker_history "$6")"
   fi
   cat <<EOF
 Implement this issue test-first: write the failing test, watch it fail, make it pass.
@@ -231,7 +328,11 @@ $(excerpt "$2" 200)
 Project coding standards:
 $(excerpt "$SOUL_FILE" 120)
 
-${excl:+$excl
+${history:+$history
+
+}${findings:+$findings
+
+}${excl:+$excl
 
 }You have $4 attempt$( (( $4 == 1 )) || printf 's' ) left. Change the code only; do not edit governance files.
 Leave your changes uncommitted in the working tree — the reviewers read the
@@ -248,35 +349,105 @@ capture_diff() { # <outfile>
   # Governance files never belong in the review diff: the implement prompt
   # forbids them, pipeline-guard blocks them, and block_issue writes MEMORY.md.
   # Leaving MEMORY.md in would let a prior blocker look like an implementation.
-  if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
-    git -C "$ROOT" diff HEAD -- . \
-      ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
-      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
-      >> "$out" 2>/dev/null || true
-  else
-    git -C "$ROOT" diff -- . \
-      ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
-      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
-      >> "$out" 2>/dev/null || true
-  fi
+  local list="$out.list"
+  : > "$list"
+  local is_gov='^(\.pipeline(\/|$)|\.pi(\/|$)|MEMORY\.md|SOUL\.md|AGENTS\.md|SYSTEM\.md|APPEND_SYSTEM\.md|CLAUDE\.md)$'
+  # Untracked first: TDD writes new test files, and a byte-prefix of `git diff`
+  # then the untracked append used to drop them first.
   local f
-  git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null | while IFS= read -r f; do
-    case "$f" in
-      .pipeline/*|.pi/*|MEMORY.md|SOUL.md|AGENTS.md|SYSTEM.md|APPEND_SYSTEM.md|CLAUDE.md|"") continue ;;
-    esac
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    echo "$f" | grep -Eq "$is_gov" && continue
     if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
-      printf '\n--- new file (untracked, binary — omitted): %s ---\n' "$f" >> "$out"
+      printf '%s\t%s\n' "$f" "binary" >> "$list"
       continue
     fi
-    printf '\n--- new file (untracked): %s ---\n' "$f" >> "$out"
-    cat "$ROOT/$f" >> "$out" 2>/dev/null || true
-  done || true
-  if (( $(wc -c < "$out") > DIFF_MAX_BYTES )); then
-    # dd, not head -c: BSD/macOS head has no -c. One block read = first N bytes.
-    dd if="$out" of="$out.trunc" bs="$DIFF_MAX_BYTES" count=1 2>/dev/null
-    printf '\n[diff truncated at %s bytes; the rest is in the working tree]\n' "$DIFF_MAX_BYTES" >> "$out.trunc"
-    mv "$out.trunc" "$out"
+    printf '%s\t%s\n' "$f" "untracked" >> "$list"
+  done < <(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null || true)
+  local name_cmd=(git -C "$ROOT" diff --name-only -- .)
+  if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
+    name_cmd=(git -C "$ROOT" diff HEAD --name-only -- .)
   fi
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    echo "$f" | grep -Eq "$is_gov" && continue
+    printf '%s\t%s\n' "$f" "tracked" >> "$list"
+  done < <("${name_cmd[@]}" \
+      ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
+      ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
+      2>/dev/null || true)
+  node -e '
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const { spawnSync } = require("node:child_process");
+    const max = Number(process.argv[1]);
+    const out = process.argv[2];
+    const listFile = process.argv[3];
+    const root = process.argv[4];
+    const hasHead = process.argv[5] === "1";
+    const rows = fs.existsSync(listFile)
+      ? fs.readFileSync(listFile, "utf8").replace(/\r/g, "").split("\n").filter(Boolean).map((l) => {
+          const i = l.indexOf("\t");
+          return { path: l.slice(0, i), kind: l.slice(i + 1) };
+        })
+      : [];
+    const seen = new Set();
+    const unique = [];
+    for (const row of rows) {
+      if (seen.has(row.path)) continue;
+      seen.add(row.path);
+      unique.push(row);
+    }
+    const load = (row) => {
+      if (row.kind === "binary") {
+        return Buffer.from(`\n--- new file (untracked, binary — omitted): ${row.path} ---\n`);
+      }
+      if (row.kind === "untracked") {
+        let body = "";
+        try { body = fs.readFileSync(path.join(root, row.path)); } catch { body = Buffer.alloc(0); }
+        const head = Buffer.from(`\n--- new file (untracked): ${row.path} ---\n`);
+        return Buffer.concat([head, Buffer.isBuffer(body) ? body : Buffer.from(String(body))]);
+      }
+      const args = hasHead
+        ? ["-C", root, "diff", "HEAD", "--", row.path]
+        : ["-C", root, "diff", "--", row.path];
+      const r = spawnSync("git", args, { encoding: null, maxBuffer: 32 * 1024 * 1024 });
+      return r.stdout && r.stdout.length ? r.stdout : Buffer.alloc(0);
+    };
+    const n = unique.length;
+    const share = n === 0 ? max : Math.max(64, Math.floor(max / n));
+    const included = [];
+    const omitted = [];
+    const truncated = [];
+    let used = 0;
+    const chunks = [];
+    for (const row of unique) {
+      const buf = load(row);
+      if (!buf.length) continue;
+      if (used >= max) { omitted.push(row.path); continue; }
+      const room = Math.min(share, max - used);
+      if (room <= 0) { omitted.push(row.path); continue; }
+      if (buf.length <= room) {
+        chunks.push(buf);
+        used += buf.length;
+        included.push(row.path);
+      } else {
+        chunks.push(buf.subarray(0, room));
+        chunks.push(Buffer.from(`\n[file truncated at ${room} bytes: ${row.path}]\n`));
+        used += room;
+        included.push(row.path);
+        truncated.push(row.path);
+      }
+    }
+    if (n === 0) { fs.writeFileSync(out, ""); process.exit(0); }
+    const footer = [];
+    footer.push("\n[review diff manifest]");
+    footer.push("included: " + (included.length ? included.join(", ") : "(none)"));
+    if (truncated.length) footer.push("truncated: " + truncated.join(", "));
+    footer.push("omitted: " + (omitted.length ? omitted.join(", ") : "(none)"));
+    fs.writeFileSync(out, Buffer.concat([...chunks, Buffer.from(footer.join("\n") + "\n")]));
+  ' "$DIFF_MAX_BYTES" "$out" "$list" "$ROOT" "$(git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1 && echo 1 || echo 0)"
+  rm -f "$list"
 }
 
 # --------------------------------------------------------------------- issues
@@ -338,6 +509,10 @@ process_issue() {
   local issue_line="$1"
   local issue_raw="${issue_line%%:*}"
   local issue_id="$issue_raw"
+  if [[ -n "$MAX_RUNS" ]] && (( GLOBAL_RUNS >= MAX_RUNS )); then
+    echo "global --max-runs $MAX_RUNS reached; skipping $issue_id" >&2
+    return 0
+  fi
   # The id becomes a directory name — keep it path-safe whatever tasks.md holds.
   # mark_issue_done still needs the raw token; sanitising it made slash ids a no-op.
   issue_id="${issue_id//[^A-Za-z0-9._-]/-}"
@@ -353,7 +528,7 @@ process_issue() {
     GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state issue "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null
     # Resume: counters come back from the state file, not from this run.
     local attempts_json issue_status
-    attempts_json="$(node "$LIB/governance.mjs" state attempts "$PIPELINE_DIR" "$root" "$issue_id")"
+    attempts_json="$(GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state attempts "$PIPELINE_DIR" "$root" "$issue_id")"
     ctrl_attempts="$(node -e 'console.log(JSON.parse(process.argv[1]).controller)' "$attempts_json")"
     master_attempts="$(node -e 'console.log(JSON.parse(process.argv[1]).master)' "$attempts_json")"
     issue_status="$(node -e 'console.log(JSON.parse(process.argv[1]).status)' "$attempts_json")"
@@ -363,29 +538,38 @@ process_issue() {
     fi
   fi
 
-  # Research runs once per issue, not per attempt, and is cached.
-  if [[ ! -s "$work/research.md" ]]; then
-    run_role "$root" "$issue_id" research \
-      "Gather context for this issue. Name the relevant files, the existing patterns to follow, and the pitfalls. Do not write code.
+  touch "$work/exclusions.md"   # resume keeps tool output of earlier attempts
+  touch "$work/findings.md"     # gate findings: never displaced by the line cap
+  # stderr once per issue: the run log records every attempt, the operator
+  # does not need the same warning on every retry.
+  local independence_warned=0 panel_short_streak=0
+
+  while :; do
+    # Research runs once per issue and is cached. take_over deletes the file
+    # so the next pass does not inherit the failed approach — that regeneration
+    # must happen inside the loop, not only before it.
+    if [[ ! -s "$work/research.md" ]]; then
+      local research_history; research_history="$(blocker_history "$issue_id")"
+      run_role "$root" "$issue_id" research \
+        "Gather context for this issue. Name the relevant files, the existing patterns to follow, and the pitfalls. Do not write code.
 
 Issue:
 $issue_line
 
 Stack and architecture:
-$(excerpt "$SOUL_FILE" 120)" "$work/research.md" || true
-  fi
-
-  touch "$work/exclusions.md"   # resume keeps the findings of earlier attempts
-  # stderr once per issue: the run log records every attempt, the operator
-  # does not need the same warning on every retry.
-  local independence_warned=0
-
-  while :; do
+$(excerpt "$SOUL_FILE" 120)
+${research_history:+
+$research_history}" "$work/research.md" || true
+    fi
+    if [[ -n "$MAX_RUNS" ]] && (( GLOBAL_RUNS >= MAX_RUNS )); then
+      echo "global --max-runs $MAX_RUNS reached; stopping $issue_id" >&2
+      return 0
+    fi
     # Budget is checked before the attempt, never after — and only exit 3
     # means "exhausted"; anything else is a broken state store: fail loudly.
     if (( ! DRY_RUN )); then
       local budget_rc=0
-      node "$LIB/governance.mjs" state budget "$PIPELINE_DIR" "$root" >/dev/null || budget_rc=$?
+      GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state budget "$PIPELINE_DIR" "$root" >/dev/null || budget_rc=$?
       case "$budget_rc" in
         0) ;;
         3) block_issue "$root" "$issue_id" "Tree budget exhausted after $ctrl_attempts controller and $master_attempts master attempts."
@@ -417,10 +601,11 @@ $(cat "$work/exclusions.md")"
     fi
 
     run_role "$root" "$issue_id" "$role" \
-      "$(build_implement_prompt "$issue_line" "$work/research.md" "$work/exclusions.md" "$left")" \
+      "$(build_implement_prompt "$issue_line" "$work/research.md" "$work/exclusions.md" "$left" "$work/findings.md" "$issue_id")" \
       "$work/implement.log" "$att" || true
 
     if [[ "$role" == "implement" ]]; then ctrl_attempts=$((ctrl_attempts+1)); else master_attempts=$((master_attempts+1)); fi
+    GLOBAL_RUNS=$((GLOBAL_RUNS+1))
     if (( ! DRY_RUN )); then
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state attempt "$PIPELINE_DIR" "$root" "$issue_id" \
         "$([[ "$role" == "implement" ]] && echo controller || echo master)" >/dev/null
@@ -593,6 +778,28 @@ REMINDER: your previous output was not parseable. Emit ONLY the JSON object — 
       reviewers_json="(no reviewer output: every reviewer was dropped by no_self_review in this attempt)"
     fi
 
+    # Two consecutive attempts below MIN_REVIEWERS are a broken setup, not a
+    # quality signal. Abort before controller and master of the second, or the
+    # saving never lands (those two calls plus every later attempt).
+    local reviewers_used=0
+    reviewers_used="$(node -e '
+      let n=0;
+      try { n = Number(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).reviewers_used) || 0; } catch {}
+      console.log(n);
+    ' "$work/gate.json")"
+    if (( reviewers_used < MIN_REVIEWERS )); then
+      panel_short_streak=$((panel_short_streak+1))
+    else
+      panel_short_streak=0
+    fi
+    if (( panel_short_streak >= 2 )); then
+      local cfg_reason="Configuration error: two consecutive attempts had fewer than $MIN_REVIEWERS parseable reviewers (last attempt: $reviewers_used). This is a broken review setup, not a code-quality signal. Map models.review.* in $AGENTS_FILE and ensure reviewers emit JSON."
+      echo "$cfg_reason" >&2
+      block_issue "$root" "$issue_id" "$cfg_reason"
+      FAILED_ISSUES+=("$issue_id")
+      return 0
+    fi
+
     # The controller proposes on a weak model; the master decides and sees the
     # original reviewer JSON, so an aggregation error is catchable.
     run_role "$root" "$issue_id" controller \
@@ -684,18 +891,57 @@ Emit ONLY this JSON, no prose and no code fence:
       fi
       ctrl_attempts=$MAX_CTRL
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state escalate "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null
+      # The cached research shaped the failed approach. Drop it so the master
+      # path gathers context again instead of inheriting it.
+      rm -f "$work/research.md"
     fi
 
     { echo "--- attempt $((ctrl_attempts + master_attempts)) (decision: $decision) ---"
-      cat "$work/gate.json"
+      findings_to_prose "$work/gate.json"
+    } >> "$work/findings.md"
+    { echo "--- attempt $((ctrl_attempts + master_attempts)) (decision: $decision) ---"
       echo "--- master ---"
-      cat "$work/master.txt"
+      excerpt "$work/master.txt" 40
     } >> "$work/exclusions.md"
   done
 }
 
 main() {
   mkdir -p "$PIPELINE_DIR"/{state,logs,prompts,work}
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if ! git -C "$ROOT" check-ignore -q .pipeline >/dev/null 2>&1; then
+      echo "warning: .pipeline/ is not gitignored; it holds diffs and prompts in plaintext and must be ignored" >&2
+    fi
+  fi
+  # Retention: keep the newest PROMPT_KEEP_RUNS run-id suffixes; a single
+  # issue otherwise archives every full diff in plaintext with no bound.
+  if [[ -d "$PIPELINE_DIR/prompts" ]]; then
+    node -e '
+      const fs = require("node:fs"); const path = require("node:path");
+      const root = process.argv[1], keep = Number(process.argv[2]) || 3;
+      const ids = new Set();
+      const files = [];
+      const walk = (d) => {
+        if (!fs.existsSync(d)) return;
+        for (const name of fs.readdirSync(d)) {
+          const p = path.join(d, name);
+          if (fs.statSync(p).isDirectory()) walk(p);
+          else files.push(p);
+        }
+      };
+      walk(root);
+      for (const p of files) {
+        const m = path.basename(p).match(/-(\d{8}T\d{6})\.txt$/);
+        if (m) ids.add(m[1]);
+      }
+      const sorted = [...ids].sort();
+      const drop = new Set(sorted.slice(0, Math.max(0, sorted.length - keep)));
+      for (const p of files) {
+        const m = path.basename(p).match(/-(\d{8}T\d{6})\.txt$/);
+        if (m && drop.has(m[1])) fs.unlinkSync(p);
+      }
+    ' "$PIPELINE_DIR/prompts" "$PROMPT_KEEP_RUNS"
+  fi
   # next_issues may die (failed !command). A bare $(...) would swallow that
   # exit and report "no open issues" with status 0 — the cron-job lie.
   local issues rc=0
@@ -706,6 +952,10 @@ main() {
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ -n "$ONLY_ISSUE" && "${line%%:*}" != "$ONLY_ISSUE" ]] && continue
+    if [[ -n "$MAX_RUNS" ]] && (( GLOBAL_RUNS >= MAX_RUNS )); then
+      echo "global --max-runs $MAX_RUNS reached" >&2
+      break
+    fi
     echo "=== ${line%%:*} ==="
     process_issue "$line"
   done <<< "$issues"
