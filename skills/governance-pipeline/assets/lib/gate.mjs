@@ -71,8 +71,8 @@ if (files.length === 0 || (checkOnly && files.length !== 1)) usage();
 // so an echo is recognised by the pipe in that word, not by failing the
 // approve|reject check — that check is only whether the reviewer gets a retry.
 // Severity decides the gate; a schema-conformant critical with verdict "blocked"
-// must still block. Last match wins: the real object is written after the
-// example, never before.
+// must still block. That is also why candidates are ranked by their worst
+// finding rather than by position — see extractJson.
 function tryParseObject(candidate) {
 	const start = candidate.indexOf("{");
 	const end = candidate.lastIndexOf("}");
@@ -94,11 +94,29 @@ function isVerdict(o) {
 	);
 }
 
-// Last valid object wins here, unlike the master verdict in auto-develop.sh,
-// which takes the strictest. The difference is deliberate: the gate ranks by
-// severity across all findings, so an appended object cannot lower the outcome
-// on its own — it would have to also drop every blocking finding, and a file
-// with no findings array is not counted as a panel member at all.
+// The strictest object wins, not the last — the same direction as the master
+// verdict in auto-develop.sh. Position is not a safe key: a reviewer that
+// judges correctly and then quotes a JSON object out of the diff to explain
+// itself would lose its own verdict, and the quoted object's empty findings
+// array would clear the gate. That is reachable from this repo's own diffs,
+// which carry dozens of `{"verdict":"approve","findings":[]}` fixtures into
+// every reviewer prompt.
+//
+// The key is the worst finding carried, not the verdict word, because that is
+// what the gate scores further down: a reviewer may write "approve" and still
+// report a critical, and that critical must block. Ranking by the word would
+// let an appended `{"verdict":"reject","findings":[]}` drop it. An appended
+// object can therefore only displace the real one by carrying strictly more
+// severe findings, which cannot lower the outcome. Ties keep the first, so the
+// leading prompt template stays powerless even when isEcho misses it.
+const worstRank = (o) =>
+	o.findings.reduce((max, f) => {
+		const severity = String(f.severity ?? "").trim().toLowerCase();
+		// Unknown ranks above critical, as it does in the merge below.
+		return Math.max(max, KNOWN_SEVERITY.has(severity) ? RANK[severity] : 4);
+	}, -1);
+const stricter = (a, b) => (worstRank(b) > worstRank(a) ? b : a);
+
 function extractJson(text) {
 	const candidates = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
 	candidates.push(text);
@@ -107,8 +125,11 @@ function extractJson(text) {
 	for (const candidate of candidates) {
 		const parsed = tryParseObject(candidate);
 		if (!parsed || isEcho(parsed)) continue;
-		if (isVerdict(parsed)) verdict = parsed;
-		else if (Array.isArray(parsed.findings)) shaped = parsed;
+		if (isVerdict(parsed)) verdict = verdict ? stricter(verdict, parsed) : parsed;
+		// Same rule for the fallback tier: a reviewer whose real object carries an
+		// off-schema verdict word ("blocked") lands here, and an appended quote
+		// must not empty it either.
+		else if (Array.isArray(parsed.findings)) shaped = shaped ? stricter(shaped, parsed) : parsed;
 	}
 	return verdict ?? shaped;
 }

@@ -500,7 +500,74 @@ rc=0; node "$LIB/gate.mjs" --check "$TMP/r-ok.json" >/dev/null 2>&1 || rc=$?
 rc=0; node "$LIB/gate.mjs" --check "$TMP/r-prose.json" >/dev/null 2>&1 || rc=$?
 [[ $rc -eq 1 ]] || fail "--check must be exit 1 for prose with no JSON (got $rc)"
 
-# Master-decision twin of extractJson: last valid decision wins, else reject.
+# ---------------------------------------------------------------- 1.0.15 R1 (unit): extractJson ranks by severity, not by position
+# A reviewer that judges correctly and then quotes a JSON object out of the
+# diff must not lose its own verdict. Candidates are ranked by their worst
+# finding, so an appended quote can only ever raise the outcome.
+cat > "$TMP/r-quote-approve.json" <<'EOF'
+Checked the diff, found a critical problem.
+
+```json
+{"role":"security","verdict":"reject","findings":[{"severity":"critical","file":"src/exec.ts","line":42,"title":"Command injection","rationale":"r","suggestion":"s"}]}
+```
+
+For context, the test fixture the diff touches reads:
+
+```json
+{"verdict":"approve","findings":[]}
+```
+EOF
+rc=0; node "$LIB/gate.mjs" --blocking critical,high "$TMP/r-quote-approve.json" > "$TMP/gate-quote-approve.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "a quoted approve after a real reject must not clear the gate (got $rc)"
+grep -q 'Command injection' "$TMP/gate-quote-approve.json"   || fail "critical finding lost to a quoted approve object"
+
+# Same shape, but the quote has no verdict field: the `verdict ?? shaped`
+# tiering already covered this. Regression guard for that layer.
+cat > "$TMP/r-quote-shaped.json" <<'EOF'
+```json
+{"role":"security","verdict":"reject","findings":[{"severity":"critical","file":"src/exec.ts","line":42,"title":"Command injection","rationale":"r","suggestion":"s"}]}
+```
+```json
+{"findings":[]}
+```
+EOF
+rc=0; node "$LIB/gate.mjs" --blocking critical,high "$TMP/r-quote-shaped.json" >/dev/null || rc=$?
+[[ $rc -eq 4 ]] || fail "a quoted findings-only object must not clear a real reject (got $rc)"
+
+# Severity is the key, not the verdict word: a reviewer may write "approve" and
+# still report a critical. Ranking candidates by the word would let the quoted
+# reject-with-no-findings win and drop that critical.
+cat > "$TMP/r-quote-reject.json" <<'EOF'
+```json
+{"role":"security","verdict":"approve","findings":[{"severity":"critical","file":"src/exec.ts","line":42,"title":"Command injection","rationale":"r","suggestion":"s"}]}
+```
+```json
+{"verdict":"reject","findings":[]}
+```
+EOF
+rc=0; node "$LIB/gate.mjs" --blocking critical,high "$TMP/r-quote-reject.json" > "$TMP/gate-quote-reject.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "a quoted empty reject must not drop a critical (got $rc)"
+grep -q 'Command injection' "$TMP/gate-quote-reject.json"   || fail "critical finding lost to a quoted reject object"
+
+# The fallback tier needs the same rule: an off-schema verdict word puts the
+# real object in `shaped`, where an appended quote could otherwise empty it.
+cat > "$TMP/r-quote-fallback.json" <<'EOF'
+```json
+{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"src/exec.ts","line":42,"title":"Command injection","rationale":"r","suggestion":"s"}]}
+```
+```json
+{"findings":[]}
+```
+EOF
+rc=0; node "$LIB/gate.mjs" --blocking critical,high "$TMP/r-quote-fallback.json" > "$TMP/gate-quote-fallback.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "a quoted empty object must not empty the shaped fallback (got $rc)"
+grep -q 'Command injection' "$TMP/gate-quote-fallback.json"   || fail "critical finding lost from the shaped fallback tier"
+
+# Master-decision twin of extractJson: the strictest valid decision wins
+# (take_over > reject > approve), and nothing parseable means reject. Same
+# direction as the gate, for the same reason: approve is the consequential
+# output and the diff sits inside the prompt, so a fragment appended after the
+# real object must never upgrade the verdict.
 cat > "$TMP/master-echo.txt" <<'EOF'
 ```json
 {"decision":"approve|reject|take_over","reasons":["..."]}
@@ -509,27 +576,49 @@ cat > "$TMP/master-echo.txt" <<'EOF'
 {"decision":"approve","reasons":["ok"]}
 ```
 EOF
+# The discriminating case: last-wins would answer "approve" here.
+cat > "$TMP/master-quote.txt" <<'EOF'
+```json
+{"decision":"reject","reasons":["the diff does not resolve the issue"]}
+```
+The fixture quoted from the diff reads:
+```json
+{"decision":"approve","reasons":["..."]}
+```
+EOF
+printf 'no json here at all\n' > "$TMP/master-prose.txt"
 cat > "$TMP/parse-master.js" <<'JS'
 const fs = require("node:fs");
 const text = fs.readFileSync(process.argv[2], "utf8");
 const cands = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
 cands.push(text);
-let d = "reject";
+// Fail-closed and strictest-wins are two different rules: null means nothing
+// parsed (-> reject), the rank only orders candidates that did.
+const RANK = { approve: 0, reject: 1, take_over: 2 };
+let d = null;
 for (const cand of cands) {
   const s = cand.indexOf("{");
   const e = cand.lastIndexOf("}");
   if (s === -1 || e <= s) continue;
   try {
     const v = String(JSON.parse(cand.slice(s, e + 1)).decision || "").toLowerCase();
-    if (["approve", "reject", "take_over"].includes(v)) d = v;
+    if (Object.hasOwn(RANK, v) && (d === null || RANK[v] > RANK[d])) d = v;
   } catch {}
 }
-console.log(d);
+console.log(d ?? "reject");
 JS
 master_got="$(node "$TMP/parse-master.js" "$TMP/master-echo.txt")"
 [[ "$master_got" == "approve" ]] \
-  || fail "master parser did not take the last valid decision after a schema echo (got $master_got)"
+  || fail "master parser did not take the real decision after a schema echo (got $master_got)"
+master_got="$(node "$TMP/parse-master.js" "$TMP/master-quote.txt")"
+[[ "$master_got" == "reject" ]] \
+  || fail "a quoted approve after a real reject must not upgrade the decision (got $master_got)"
+master_got="$(node "$TMP/parse-master.js" "$TMP/master-prose.txt")"
+[[ "$master_got" == "reject" ]] \
+  || fail "master parser must fail closed on prose with no JSON (got $master_got)"
 grep -q 'cands.push(text)' "$SH" || fail "auto-develop.sh master parser lost the raw-text fallback"
+grep -q 'RANK\[v\]>RANK\[d\]' "$SH" \
+  || fail "auto-develop.sh master parser lost strictest-wins"
 
 # ---------------------------------------------------------------- state store
 GOVERNANCE_AGENTS="$TMP/AGENTS.md" node "$LIB/governance.mjs" state init "$TMP/proj" issue-1 >/dev/null
@@ -1769,6 +1858,47 @@ grep -q 'untrusted input' "$leak_prompt" \
 if awk '/const gov = shellWritesGovernance/{exit} /declined by the user/{f=1;next} f' \
      "$ROOT/extensions/pipeline-guard.ts" | grep -qE '^[[:space:]]*return;[[:space:]]*$'; then
   fail "pipeline-guard returns after a confirmed destructive command and skips the governance/privileged gates"
+fi
+
+# ---------------------------------------------------------------- 1.0.15 R1: a quoted JSON object must not overwrite a reviewer's verdict
+# The gate twin of 1.0.14 R4. A reviewer that rejects and then quotes a JSON
+# object out of the diff to explain itself lost its own verdict to the quote,
+# and with it every finding: the gate reported clear and exited 0. Reachable
+# from this repo's own diffs, which carry dozens of
+# `{"verdict":"approve","findings":[]}` fixtures into every reviewer prompt.
+proj_qv="$TMP/run-quoted-verdict"; mkdir -p "$proj_qv/.pipeline/lib"
+cp "$SH" "$proj_qv/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_qv/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_qv/AGENTS.md"
+printf -- "- [ ] issue-qv: reviewer quotes a fixture\n" > "$proj_qv/tasks.md"
+git_init "$proj_qv"
+stub_qv="$TMP/stub-qv-bin"; mkdir -p "$stub_qv"
+cat > "$stub_qv/pi" <<'STUBQV'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+case "$last" in
+  "Gather context"*)       echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff for one concern only:"*)
+    echo 'I checked the diff and found a critical problem.'
+    echo '```json'
+    echo '{"role":"r","verdict":"reject","findings":[{"severity":"critical","file":"a.ts","line":42,"title":"Command injection","rationale":"r","suggestion":"s"}]}'
+    echo '```'
+    echo 'For context, the fixture the diff touches reads:'
+    echo '```json'
+    echo '{"verdict":"approve","findings":[]}'
+    echo '```' ;;
+  "Merge these reviewer"*) echo '{"verdict":"approve"}' ;;
+  "Decide this attempt"*)  echo '{"decision":"approve","reasons":["gate is the guard here"]}' ;;
+  *) echo '{}' ;;
+esac
+STUBQV
+chmod +x "$stub_qv/pi"
+rc=0
+out="$(cd "$proj_qv" && PATH="$stub_qv:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -ne 0 ]] || fail "a quoted approve after a real reject cleared the gate: $out"
+if echo "$out" | grep -q "^approved: issue-qv"; then
+  fail "the gate approved a diff whose reviewer had rejected it: $out"
 fi
 
 # ---------------------------------------------------------------- docs: every point has coverage in the audit list / skill
