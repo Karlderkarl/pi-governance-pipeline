@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.13
+pi install npm:pi-governance-pipeline@1.0.14
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.13
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.14
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.13
+pi -e npm:pi-governance-pipeline@1.0.14
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.13
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.14
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -82,6 +82,7 @@ Typical first run:
 pi
 > /govern docs/PRD.md      # writes governance, asks about anything unresolved
 > /automate                # generates the pipeline, validates the contract
+> !grep -qxF '.pipeline/' .gitignore 2>/dev/null || echo '.pipeline/' >> .gitignore
 > !./auto-develop.sh --dry-run
 ```
 
@@ -165,18 +166,42 @@ that in two places, not one:
   matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
   constructed commands are not a boundary. The script's own `ISSUE_SOURCE=!command`,
   `LINT_CMD`, and `TEST_CMD` run through `eval` and are env-overridable — whoever
-  sets the run's environment has code execution, with or without the guard. The governance-write gate covers the
+  sets the run's environment has code execution, with or without the guard.
+  `LINT_CMD` and `TEST_CMD` also ship **empty**: an unadapted script runs no
+  deterministic gate at all and model review is the only check. The script warns
+  once at start and records `gates` in every JSONL log event, but adapting them
+  is the operator's job. The governance-write gate covers the
   `write` and `edit` tools plus obvious bash and PowerShell write paths (`sed -i`,
   `tee`, `Set-Content`, redirections, `mv`/`cp`/`rm`) that name a governance file —
   not every way to rewrite `AGENTS.md`. `--exclude-tools bash,powershell` or a
   container is the only real boundary. Run the pipeline in a container or VM when
   you need isolation.
   Without a UI it blocks rather than asks.
+- `--approve` on a child `pi -p` is much broader than the guard. pi's own trust
+  prompt states what project trust grants: `.pi` settings and resources load,
+  **missing project packages are installed, and project extensions execute**. An
+  unattended loop against a repository you do not fully trust is therefore package
+  installation plus code execution out of that repository, once per role per
+  attempt. `review.*` roles are excluded and run with `--no-approve`: it keeps the
+  trust-gated `.pi/APPEND_SYSTEM.md` from carrying panel size or the role-to-model
+  mapping into a review, and it keeps a project extension from replacing the
+  `read` / `grep` / `find` / `ls` tools the reviewers are limited to (pi lets an
+  extension register a tool under a built-in name). The remaining roles need the
+  project's own tooling and keep the flag. Containerize the run when the
+  repository is not yours.
 - Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
   the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
   human already approved — except `sudo`, recursive `rm`, and force-push, which
   stay armed unless `PIPELINE_ALLOW_DESTRUCTIVE=1`. Governance writes stay gated
   even in an unattended run, under their own switch.
+
+Multi-model review is a defence against correlated blind spots — three processes,
+at least two providers, no shared verdict. It is not a defence against the object
+under review. Issue text (`ISSUE_SOURCE=!gh issue list`, Jira) and the diff itself
+are untrusted input: a diff that instructs the panel to return an empty findings
+list passes three independent reviewers, clears the gate honestly, and the master
+approves over a real pass. The prompts frame both explicitly as content to judge
+rather than instructions, which is a mitigation, not a boundary.
 
 | Variable | Effect |
 |---|---|

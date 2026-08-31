@@ -47,6 +47,8 @@ For Claude Code, the same extracted facts render as `CLAUDE.md` instead. One ext
 
 Also record here: dev commands, environment variables, and tool preferences using this harness's tool names (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls`).
 
+**Never put pipeline internals in `SYSTEM.md` / `.pi/APPEND_SYSTEM.md`**: panel size, the role-to-model mapping, reviewer role names, or which model implements. The reference script launches reviewers with `--no-approve` so this file cannot reach them, but a generated pipeline that forgets that flag — or an operator who runs a role by hand — would put every one of those facts into a reviewer's system prompt. Those belong in `AGENTS.md`, which reviewers already do not load (`-nc`).
+
 ## MEMORY.md
 
 Living status. The only file that changes on nearly every run.

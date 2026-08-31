@@ -1,7 +1,7 @@
 ---
 name: governance-pipeline
 description: Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, and hard run budgets. Use when the user wants to generate or audit governance from a PRD, or to generate, re-sync, or audit an auto-develop pipeline with multi-model review. Do not load merely because a repository contains AGENTS.md.
-compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md. Child `pi -p` processes load project-trusted resources (SYSTEM.md via `.pi/APPEND_SYSTEM.md`) only with a saved trust decision or `--approve` (the latter only after `--unattended`).
+compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md. Child `pi -p` processes load project-trusted resources (SYSTEM.md via `.pi/APPEND_SYSTEM.md`) only with a saved trust decision or `--approve` (the latter only after `--unattended`); `review.*` roles pass `--no-approve` and get neither.
 ---
 
 # Governance Pipeline
@@ -33,8 +33,11 @@ mkdir -p .pipeline/lib && cp <skill>/assets/lib/*.mjs .pipeline/lib/
 cp <skill>/assets/auto-develop.sh . && chmod +x auto-develop.sh
 node .pipeline/lib/governance.mjs config AGENTS.md   # validate before the first run
 printf -- '- [ ] issue-1: first task\n' > tasks.md     # dry-run reads this; without it it dies
+grep -qxF '.pipeline/' .gitignore 2>/dev/null || echo '.pipeline/' >> .gitignore   # before the first run, not after
 ./auto-develop.sh --dry-run                          # routing and prompts, zero model calls; notes if pi is missing
 ```
+
+**Both gate commands ship empty.** `LINT_CMD` and `TEST_CMD` have no defaults — a project's gates cannot be guessed. An unadapted script therefore satisfies "deterministic gates run before any model-based review" with nothing to run, and `--dry-run` cannot show it because the gates sit behind the dry-run guard. The script says so once at start (`warning: neither LINT_CMD nor TEST_CMD is set`) and records `gates` in every JSONL log event, so a finished run stays auditable. Adapting them is not optional.
 
 **Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub, including `--auto-merge`). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
 
@@ -58,7 +61,15 @@ The package also ships `pipeline-guard`, an extension that blocks privileged bas
 
 **`eval` is the issue source.** `ISSUE_SOURCE=!command`, `LINT_CMD`, and `TEST_CMD` run through `eval` and are all env-overridable. That is deliberate (one-line adaptation to `gh` or Jira) — it also means the run's environment is a shell, with or without `pipeline-guard`.
 
-**Project trust.** `--approve` is passed to child `pi -p` processes only after `--unattended` / `--auto-merge` export `PIPELINE_UNATTENDED=1`. Without it, pi loads trust-gated project resources only if the operator already trusted the project interactively. `AGENTS.md` still loads (context files are trust-independent); `SYSTEM.md` via `.pi/APPEND_SYSTEM.md` does not. An attended run can therefore implement against `AGENTS.md` while silently missing the rest of governance.
+**Project trust.** `--approve` is passed to child `pi -p` processes only after `--unattended` / `--auto-merge` export `PIPELINE_UNATTENDED=1`, and never to a `review.*` role. Without it, pi loads trust-gated project resources only if the operator already trusted the project interactively. `AGENTS.md` still loads (context files are trust-independent); `SYSTEM.md` via `.pi/APPEND_SYSTEM.md` does not. An attended run can therefore implement against `AGENTS.md` while silently missing the rest of governance.
+
+Trusting a project is not only about the guard. pi's own trust prompt spells out what it grants, and `--approve` grants all of it without asking:
+
+1. `.pi/settings.json` and the rest of `.pi` load
+2. missing project packages are installed
+3. project extensions execute
+
+In an unattended run that happens once per role per attempt. On a repository the operator does not fully trust, an unattended loop is therefore package installation plus code execution out of the target repo — containerize it. `-t read,grep,find,ls` does not contain that: an extension may register a tool with the name of a built-in (`read`, `grep`, `find`, `ls`, `bash`, …) and replace it. Reviewers are excluded from `--approve` for exactly this reason; the other roles are not, because they need the project's own tooling.
 
 ## Choosing a mode
 
@@ -127,9 +138,11 @@ These hold in every generated pipeline. If a requested change would break one, s
 
 **Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` are recorded as follow-ups in the gate JSON and fed back on retry. The bundled script does not open tickets for them — that is a generator adaptation point. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
 
-**The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary. The master cannot approve over a blocking gate: a deterministic severity fail outranks the model verdict.
+**The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary. The master cannot approve over a blocking gate: a deterministic severity fail outranks the model verdict. When the master's output contains more than one parseable decision object, the strictest wins (`take_over` > `reject` > `approve`), so a fragment appended after the real object cannot upgrade the verdict. Echoing the prompt's own example costs nothing — its `decision` reads `approve|reject|take_over`, which is not a valid word. A stray stricter value does cost an attempt; that is the cheap direction to fail in.
 
 **Safe by default.** Privileged execution and auto-merge stay off unless `--unattended` / `--auto-merge` are passed. pi has no permission prompts, so the confirmation must happen in the script *before* the loop starts, or the run must be containerized. An extension cannot ask under `pi -p` — `ctx.hasUI` is false there. Never rely on a runtime dialog in an unattended run.
+
+**Multi-model review covers correlated blind spots, not manipulation.** Three processes, at least two providers, no shared verdict and `no_self_review` are a defence against every reviewer missing the same thing. They are not a defence against the object under review talking to the panel. Two inputs can be foreign-controlled: the **issue text**, as soon as `ISSUE_SOURCE=!gh issue list` or a Jira query feeds it, and the **diff**, which the implement model wrote. A diff that instructs the reviewers to return an empty `findings` list passes three independent processes, clears the gate honestly, and the master then approves over a real `gate_status == 0` — the master's gate check only covers the opposite case. The bundled prompts frame issue and diff explicitly as untrusted input to be judged, not instructions; that is a mitigation, not a boundary. Treat a foreign-fed `ISSUE_SOURCE` as untrusted input to the whole loop and containerize the run.
 
 **Missing configuration degrades, never breaks.** Governance without a `models:` block runs every role on the default model. Absent budget fields fall back to documented defaults. Verify this rather than assuming it.
 
@@ -142,13 +155,20 @@ Two constraints the generated script must enforce:
 - **No self-review.** A model that implemented a diff must not review it. This is enforced over `provider/model` refs, so it only holds for roles that are actually mapped: two unmapped roles both run pi's default model, and neither carries a ref to compare. Map at least two `review.*` roles — with fewer, the panel may be the implementer reviewing its own diff and the gate would approve it. `governance.mjs` warns about that at generation time and errors when `no_self_review` is written into `AGENTS.md` explicitly. On collision, drop that reviewer for the run and gate on the rest — but if drops and unparseable output shrink the panel below two reviewers, the gate blocks instead of approving. One opinion is not a review panel. The bundled script passes `MIN_REVIEWERS` (default 2). `gate.mjs` itself defaults `--min-reviewers` to 1 so a direct caller is unchanged.
 - **Provider diversity.** Reviewers should span at least two providers. Three prompts against one model share its blind spots, which defeats the purpose of reviewing three times.
 
-Invoke a role like this, reading `MODEL` from the mapping. Feed the prompt on stdin — interpolating it onto argv exceeds macOS `ARG_MAX` once the master sees the diff plus every reviewer JSON. Pass `--approve` only after the startup gate has set `PIPELINE_UNATTENDED=1`; it trusts every project-local resource, not only the guard.
+Invoke a role like this, reading `MODEL` from the mapping. Feed the prompt on stdin — interpolating it onto argv exceeds macOS `ARG_MAX` once the master sees the diff plus every reviewer JSON. Pass `--approve` only after the startup gate has set `PIPELINE_UNATTENDED=1`, and never to a reviewer: it trusts every project-local resource, not only the guard (see **Safety**).
 
 ```bash
 pi_args=(-p --no-session)
-[[ "${PIPELINE_UNATTENDED:-}" == 1 ]] && pi_args+=(--approve)
-# review.*: -nc -t read,grep,find,ls   (AGENTS.md must not leak panel size)
+# review.*: -nc -t read,grep,find,ls --no-approve
+#   -nc keeps AGENTS.md out (panel size, roles, implementer model).
+#   --no-approve keeps .pi/APPEND_SYSTEM.md out: -nc only drops context files,
+#   and SYSTEM.md is trust-gated, so --approve or a saved trust decision would
+#   put it back into the reviewer prompt. Project settings and extensions go
+#   with it — that is the isolation, not a side effect.
 # controller / master_review: --no-tools  (the diff is inline after per-file truncation)
+if [[ "${PIPELINE_UNATTENDED:-}" == 1 && "$ROLE" != review.* ]]; then
+  pi_args+=(--approve)
+fi
 if [[ "$MODEL" == "default" ]]; then
   pi "${pi_args[@]}" < "$ppath"
 else

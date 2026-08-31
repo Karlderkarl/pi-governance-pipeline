@@ -24,7 +24,9 @@ auto-develop.sh              # entry point, the loop
 tasks.md                     # or the issue source declared in governance
 ```
 
-`.pipeline/` is gitignore-pflicht. A single issue can archive tens of prompt files and hundreds of kilobytes of diffs, including untracked source, in plaintext. The reference script warns at start if `.pipeline/` is not ignored, and deletes prompt files whose run-id suffix is older than `PROMPT_KEEP_RUNS` (default 3).
+The diff filter assumes pi's config dir is `.pi` (`CONFIG_DIR_NAME`, which pi reads from its own `package.json`). A rebranded distribution that sets `piConfig.configDir` must change both exclusion paths in `capture_diff` — the untracked regex and the tracked pathspec list — or its `SYSTEM.md` reaches every reviewer prompt.
+
+`.pipeline/` must be gitignored. A single issue can archive tens of prompt files and hundreds of kilobytes of diffs, including untracked source, in plaintext. The reference script warns at start if `.pipeline/` is not ignored, and deletes prompt files whose run-id suffix is older than `PROMPT_KEEP_RUNS` (default 3).
 
 ## State file
 
