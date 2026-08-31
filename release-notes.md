@@ -1,29 +1,24 @@
-Closes the verified 1.0.12 findings: unknown contract keys warn, an unparsed contract fence is an error, state warnings print once, a short review panel aborts as a configuration error after two attempts (~17 calls instead of 55), and MEMORY.md / gate findings actually re-enter the next prompt.
+Closes the verified findings of an external review of 1.0.13. The headline fix is a prompt leak: without a `.gitignore` entry for `.pipeline/`, every prompt, log and diff of the running pipeline was pasted into every reviewer, controller and master prompt. Reviewer isolation, the master verdict parser, and the guard's confirmation chain are tightened alongside it.
 
 ### Fixed
-- Unknown contract keys (`implement_msater`, `review.securty`, `max_atempts_controller`) warn and stay ignored — never refused — so v2 fields remain forward-compatible.
-- A `pipeline-contract` marker or a `models:` / `budgets:` / `review:` line with no parsed fenced YAML block is a contract error (exit 2), not silent defaults. Absence of both is still the documented default path.
-- `state` still validates on every call; identical warnings are printed once per `.pipeline/` directory. Errors stay loud.
-- `state attempts` and `state budget` set `GOVERNANCE_AGENTS`, so `AGENTS_FILE` cannot silently fall back to a different `AGENTS.md`.
-- Two consecutive attempts with `reviewers_used < MIN_REVIEWERS` abort as a configuration error before controller and master of the second attempt. A stub run where reviewers never emit JSON costs 17 model calls instead of 55.
-- Each `pi -p` can be wrapped in GNU `timeout` / `gtimeout` (`ROLE_TIMEOUT_SECONDS`, default 0). Exit 124 empties the outfile so the role is unavailable.
-- Credential preflight does not call `pi auth check` with an AGENTS.md model id (openrouter ids such as `google/gemini-*` would abort a healthy run).
-- `MEMORY.md` blocker entries for the current issue are fed into research and implement prompts (`BLOCKER_HISTORY_MAX`).
-- Gate findings live in `findings.md` and are never displaced by a chatty linter. Lint/test output stays under `EXCLUSIONS_MAX_LINES`.
-- Diff truncation is per file, not a byte prefix. Omitted and truncated paths are named in a manifest; untracked TDD files are considered first.
-- `take_over` deletes cached `research.md` so the escalated model gathers context again.
-- Findings re-enter the implement prompt as prose (file + title/rationale), not `file:line`.
+- `capture_diff` filtered untracked paths with a regex whose single trailing `$` covered the whole alternation: `.pipeline` matched, `.pipeline/logs/x.jsonl` did not. In a repository that had not gitignored `.pipeline/` yet — the state the documented quickstart left behind — the run's own logs, prompt archives, `diff.patch` and `findings.md` entered every role prompt, and the real change competed with them for `DIFF_MAX_BYTES`. An untracked `.pi/APPEND_SYSTEM.md` was affected the same way. The tracked path was never affected; its git pathspecs already excluded nested files.
+- `review.*` roles now run with `--no-approve`. `-nc` only drops context files, so it kept `AGENTS.md` out but not the trust-gated `.pi/APPEND_SYSTEM.md`: in an unattended run `--approve` was passed to every child process, and in an attended one a saved trust decision did the same, either of which could carry panel size, reviewer roles or the implementer model back into a review through `SYSTEM.md`. Reviewers now also see no project settings or extensions — that is the isolation, not a side effect. The other roles keep `--approve`, which is set explicitly per role rather than relying on pi's flag precedence.
+- `pipeline-guard` returned after a confirmed destructive command and skipped everything after it. `sudo tee AGENTS.md < payload` raised one prompt titled "privilege escalation" and never the governance-write prompt; `rm -rf build && gh pr merge 12` asked only about the `rm`. The destructive branch now falls through to the governance and privileged gates, each naming what it guards.
+- The master verdict took the **last** parseable decision. Since the diff sits inside the master prompt, a fragment that looked like a second decision object and landed after the real one won. Among several parseable candidates the **strictest** now wins: `take_over` > `reject` > `approve`. Fail-closed is unchanged and remains a separate rule — nothing parseable is still `reject`, and `gate_status == 0` is still required for an approval. Echoing the prompt's own schema example still costs no attempt: its `decision` field reads `approve|reject|take_over`, which is not a valid word.
 
 ### Added
-- `--no-session` on every role; `review.*` gets `-nc` and `-t read,grep,find,ls`; `controller` / `master_review` get `--no-tools`.
-- `--max-runs <n>` is an optional invocation cap across issues (not a PRD field). Default off.
-- `PROMPT_KEEP_RUNS` prunes `.pipeline/prompts/`. The script warns if `.pipeline/` is not gitignored and if `AGENTS.override.md` exists.
-- Drift notes in `MEMORY.md` for unmet PRD AK6, dead `max_split_depth`, and the missing generation eval.
+- A start-up warning when neither `LINT_CMD` nor `TEST_CMD` is set. Both ship empty, both gates are skipped silently, and `--dry-run` cannot reveal it because they sit behind the dry-run guard — so an unadapted script satisfied "deterministic gates run before any model-based review" with nothing to run. Every JSONL log event now carries a `gates` field (`none`, `lint`, `test`, `lint,test`) so a finished run stays auditable.
+- Reviewer and master prompts frame the issue text and the diff explicitly as untrusted input to be judged, not as instructions. `SKILL.md` gains a matching invariant: multi-model review defends against correlated blind spots, not against the object under review — a diff that asks the panel for an empty `findings` list passes three independent processes and clears the gate honestly. A mitigation, not a boundary.
+- `shellcheck -S warning` runs in `.github/workflows/ci.yml` over `auto-develop.sh` and `tests/smoke.sh`. Both are clean; the two genuine false positives (`-t read,grep,find,ls` as pi flag syntax, `done` as a status argument) carry inline `disable` comments.
+- `tests/smoke.sh` covers every fix above: nested governance paths never reach a reviewer prompt, reviewers are invoked with `--no-approve` and never `--approve`, the empty-gate warning and the `gates` log field, an appended `approve` losing to a real `reject` while an echoed schema example still does not, and the guard's destructive branch falling through.
+- `/pipeline-audit` gains points 24 and 25: both diff-exclusion paths must cover nested files, and `SYSTEM.md` / `APPEND_SYSTEM.md` must carry no pipeline internals.
 
 ### Changed
-- SKILL.md diagram: `reject` escalates to `implement_master` after `max_attempts_controller`; it does not block at 3.
-- `pipeline-template.md` no longer claims token usage in the JSONL log (`log_event` does not parse `pi --mode json`).
-- `/pipeline-audit` covers preflight, role toolset, `--max-runs`, and MEMORY.md feedback.
-- README install pins, tuning table, and the release section track 1.0.13.
+- The quickstart in `SKILL.md` and the first-run recipe in `README.md` add `.pipeline/` to `.gitignore` before the first dry-run instead of stating the requirement further down the page.
+- `README.md` and `SKILL.md` spell out what `--approve` grants, in pi's own words: `.pi` settings and resources load, missing project packages are installed, and project extensions execute. On a repository the operator does not fully trust, an unattended loop is package installation plus code execution out of that repository — containerize it. `-t read,grep,find,ls` is not a containment: an extension may register a tool under a built-in name.
+- `references/governance-files.md` forbids pipeline internals (panel size, role-to-model mapping, model names) in `SYSTEM.md` / `.pi/APPEND_SYSTEM.md`.
+- `capture_diff` records that `.pi` is an assumption, not a lookup: it is pi's `CONFIG_DIR_NAME`, and a rebranded distribution setting `piConfig.configDir` must change the untracked regex and the tracked pathspec together. Named as an adaptation point in `pipeline-template.md` and checked by `/pipeline-audit` point 24. `pipeline-guard` needs no equivalent — it matches governance filenames, not config paths, so it is already directory-agnostic.
+- German leftovers removed from English files (`pipeline-template.md`, `gate.mjs`, `smoke.sh`); unused `catch` binding in `gate.mjs`; the `dd` byte cap now records why `head -c` is not used (POSIX `head` defines only `-n`).
+- README install pins and the release section track 1.0.14.
 
-**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.12...v1.0.13
+**Full Changelog**: https://github.com/Karlderkarl/pi-governance-pipeline/compare/v1.0.13...v1.0.14
