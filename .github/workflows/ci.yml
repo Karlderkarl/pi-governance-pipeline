@@ -21,5 +21,12 @@ jobs:
         with:
           node-version: 22
 
+      # 1000+ lines of bash covered only by an end-to-end suite. shellcheck
+      # catches the class smoke.sh cannot: quoting and expansion bugs on a
+      # branch the fixtures never take. Both files are clean at -S warning;
+      # the two genuine false positives carry inline disable comments.
+      - name: Shellcheck the shipped script and the suite
+        run: shellcheck -S warning skills/governance-pipeline/assets/auto-develop.sh tests/smoke.sh
+
       - name: Smoke test pipeline assets
         run: bash tests/smoke.sh
