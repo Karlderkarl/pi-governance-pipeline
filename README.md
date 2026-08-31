@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.14
+pi install npm:pi-governance-pipeline@1.0.15
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.14
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.15
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.14
+pi -e npm:pi-governance-pipeline@1.0.15
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.14
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.15
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
