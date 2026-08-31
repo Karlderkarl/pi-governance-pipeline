@@ -121,7 +121,11 @@ export default function (pi: ExtensionAPI) {
 					`${destructive.reason}:\n\n${command}\n\nAllow?`,
 				);
 				if (!ok) return { block: true, reason: `pipeline-guard: ${destructive.reason} declined by the user` };
-				return;
+				// Fall through deliberately. A confirmed destructive command is still a
+				// governance write or a privileged command if it is one: `sudo tee
+				// AGENTS.md` used to raise a single "privilege escalation" prompt and
+				// never the governance-write one, and `rm -rf build && gh pr merge 12`
+				// asked only about the rm. Each gate names what it is guarding.
 			}
 			const gov = shellWritesGovernance(command);
 			if (gov) {

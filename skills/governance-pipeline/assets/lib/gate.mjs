@@ -70,7 +70,7 @@ if (files.length === 0 || (checkOnly && files.length !== 1)) usage();
 // different mistakes: the prompt shows `"verdict":"approve|reject"` inline,
 // so an echo is recognised by the pipe in that word, not by failing the
 // approve|reject check — that check is only whether the reviewer gets a retry.
-// Severity decides the gate; a schemakonform critical with verdict "blocked"
+// Severity decides the gate; a schema-conformant critical with verdict "blocked"
 // must still block. Last match wins: the real object is written after the
 // example, never before.
 function tryParseObject(candidate) {
@@ -94,6 +94,11 @@ function isVerdict(o) {
 	);
 }
 
+// Last valid object wins here, unlike the master verdict in auto-develop.sh,
+// which takes the strictest. The difference is deliberate: the gate ranks by
+// severity across all findings, so an appended object cannot lower the outcome
+// on its own — it would have to also drop every blocking finding, and a file
+// with no findings array is not counted as a panel member at all.
 function extractJson(text) {
 	const candidates = [...text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]);
 	candidates.push(text);
@@ -135,7 +140,7 @@ for (const file of files) {
 	let parsed = null;
 	try {
 		parsed = extractJson(readFileSync(file, "utf8"));
-	} catch (error) {
+	} catch {
 		parsed = null;
 	}
 	// extractJson already requires a findings array; keep the check so a
