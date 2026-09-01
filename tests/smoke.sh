@@ -1901,6 +1901,103 @@ if echo "$out" | grep -q "^approved: issue-qv"; then
   fail "the gate approved a diff whose reviewer had rejected it: $out"
 fi
 
+# ---------------------------------------------------------------- take_over must not stash the governance away
+# The quickstart in SKILL.md commits only .gitignore, so AGENTS.md, SOUL.md,
+# tasks.md and the script itself are untracked in an unmodified setup.
+# `git stash push -u` takes all four. git_init above commits everything and
+# therefore cannot see this: the seeded tree is the unlucky case.
+proj_stash="$TMP/run-stash-governance"; mkdir -p "$proj_stash/.pipeline/lib"
+cp "$SH" "$proj_stash/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_stash/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_stash/AGENTS.md"
+printf '# Soul\n\nNever use eval.\n' > "$proj_stash/SOUL.md"
+printf -- "- [ ] issue-stash: governance must survive take_over\n" > "$proj_stash/tasks.md"
+printf '.pipeline/\n' > "$proj_stash/.gitignore"
+git -C "$proj_stash" init -q
+git -C "$proj_stash" add .gitignore
+git -C "$proj_stash" -c user.email=t@t -c user.name=t commit -qm init
+stub_stash="$TMP/stub-stash"; mkdir -p "$stub_stash"
+cat > "$stub_stash/pi" <<'EOF2'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff"*)
+    printf '%s' "$last" >> "${PI_DUMP:?}"
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"take_over","reasons":["start over"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF2
+chmod +x "$stub_stash/pi"
+rc=0
+out="$(cd "$proj_stash" && PATH="$stub_stash:$PATH" PI_DUMP="$TMP/stash-reviews.txt" bash auto-develop.sh 2>&1)" || rc=$?
+echo "$out" | grep -q "stashed working tree as" || fail "take_over did not stash at all: $out"
+for keep in AGENTS.md SOUL.md tasks.md auto-develop.sh MEMORY.md; do
+  [[ -e "$proj_stash/$keep" ]] || fail "take_over stashed $keep away; the run continues without it"
+done
+# Routing is resolved once up front, so the stash never flipped a model. What
+# it did flip is the context every child pi loads from cwd: without SOUL.md
+# the reviewers after the first take_over judge the diff with no standards.
+soul_seen="$(grep -c 'Never use eval' "$TMP/stash-reviews.txt" || true)"
+[[ "$soul_seen" -ge 4 ]] \
+  || fail "SOUL.md reached only $soul_seen reviewer prompts; it was stashed away mid-run"
+if echo "$out" | grep -q "AGENTS.md not found"; then
+  fail "state re-read an AGENTS.md the stash had removed: $out"
+fi
+
+# ---------------------------------------------------------------- non-ASCII paths must reach the reviewers
+# core.quotePath is on by default: --name-only prints such a path C-quoted, and
+# the quoted form matches no file. Tracked, that yielded an empty per-file diff
+# and the file vanished from the diff AND from the manifest; untracked, the
+# read failed and the reviewers got a new file with no content. Both fail open.
+proj_utf="$TMP/run-utf8-paths"; mkdir -p "$proj_utf/.pipeline/lib"
+cp "$SH" "$proj_utf/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_utf/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_utf/AGENTS.md"
+utf_tracked="$(printf 'caf\303\251.md')"      # café.md
+utf_new="$(printf 'gr\303\266\303\237e.md')"  # größe.md
+printf 'before\n' > "$proj_utf/$utf_tracked"
+printf -- "- [ ] issue-utf: non-ascii paths\n" > "$proj_utf/tasks.md"
+git_init "$proj_utf"
+printf 'AFTER-TRACKED\n' > "$proj_utf/$utf_tracked"
+printf 'NEW-UNTRACKED\n' > "$proj_utf/$utf_new"
+stub_utf="$TMP/stub-utf"; mkdir -p "$stub_utf"
+cat > "$stub_utf/pi" <<'EOF2'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+if [[ -z "$last" ]]; then for a in "$@"; do last="$a"; done; fi
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) : ;;
+  "You review a diff"*)
+    printf '%s' "$last" > "${PI_DUMP:?}"
+    echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF2
+chmod +x "$stub_utf/pi"
+rc=0
+out="$(cd "$proj_utf" && PATH="$stub_utf:$PATH" PI_DUMP="$TMP/utf-review.txt" bash auto-develop.sh 2>&1)" || rc=$?
+[[ "$rc" -eq 0 ]] || fail "non-ascii run failed (rc=$rc): $out"
+grep -q 'AFTER-TRACKED' "$TMP/utf-review.txt" \
+  || fail "the tracked non-ascii file never reached the reviewers"
+grep -q 'NEW-UNTRACKED' "$TMP/utf-review.txt" \
+  || fail "the untracked non-ascii file reached the reviewers without its content"
+grep -q "included: .*$utf_tracked" "$TMP/utf-review.txt" \
+  || fail "manifest does not name the tracked non-ascii file as included"
+grep -q "included: .*$utf_new" "$TMP/utf-review.txt" \
+  || fail "manifest does not name the untracked non-ascii file as included"
+grep -qF -- '--name-only -z' "$SH" \
+  || fail "capture_diff lists changed paths without -z; git will C-quote them again"
+grep -qF -- 'chunks.length === 0' "$SH" \
+  || fail "a manifest-only diff would still satisfy the empty-diff guard"
+
 # ---------------------------------------------------------------- docs: every point has coverage in the audit list / skill
 grep -q 'take_over' "$ROOT/skills/governance-pipeline/SKILL.md" \
   || fail "SKILL.md never names take_over / implement_master escalation"

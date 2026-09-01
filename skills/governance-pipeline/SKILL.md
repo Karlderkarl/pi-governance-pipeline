@@ -1,7 +1,7 @@
 ---
 name: governance-pipeline
 description: Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and turns that governance into an issue-driven auto-develop pipeline with per-role model routing, independent multi-model review, and hard run budgets. Use when the user wants to generate or audit governance from a PRD, or to generate, re-sync, or audit an auto-develop pipeline with multi-model review. Do not load merely because a repository contains AGENTS.md.
-compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md. Child `pi -p` processes load project-trusted resources (SYSTEM.md via `.pi/APPEND_SYSTEM.md`) only with a saved trust decision or `--approve` (the latter only after `--unattended`); `review.*` roles pass `--no-approve` and get neither.
+compatibility: Requires pi with bash, read, write, edit, grep, find, ls. Model routing requires API keys for every provider referenced in AGENTS.md. Child `pi -p` processes load project-trusted resources (SYSTEM.md via `.pi/APPEND_SYSTEM.md`) only with a saved trust decision, `--approve` (the latter only after `--unattended`), or a global `defaultProjectTrust: always`; `review.*` roles pass `--no-approve` and get neither.
 ---
 
 # Governance Pipeline

@@ -393,24 +393,30 @@ capture_diff() { # <outfile>
   local is_gov='^(\.pipeline|\.pi)(/|$)|^(MEMORY|SOUL|AGENTS|SYSTEM|APPEND_SYSTEM|CLAUDE)\.md$'
   # Untracked first: TDD writes new test files, and a byte-prefix of `git diff`
   # then the untracked append used to drop them first.
+  # -z, and NUL records in $list. Without it git C-quotes every path that holds
+  # a non-ASCII byte, and the quoted form it prints back matches no file: the
+  # untracked branch below reads it as an empty body and ships a new file with
+  # no content to the reviewers, while the tracked branch produces an empty
+  # diff and drops the file from the review altogether. Both fail open, and
+  # the manifest reports coverage that did not happen.
   local f
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [[ -z "$f" ]] && continue
-    echo "$f" | grep -Eq "$is_gov" && continue
+    printf '%s\n' "$f" | grep -Eq "$is_gov" && continue
     if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
-      printf '%s\t%s\n' "$f" "binary" >> "$list"
+      printf '%s\t%s\0' "$f" "binary" >> "$list"
       continue
     fi
-    printf '%s\t%s\n' "$f" "untracked" >> "$list"
-  done < <(git -C "$ROOT" ls-files --others --exclude-standard 2>/dev/null || true)
-  local name_cmd=(git -C "$ROOT" diff --name-only -- .)
+    printf '%s\t%s\0' "$f" "untracked" >> "$list"
+  done < <(git -C "$ROOT" ls-files --others --exclude-standard -z 2>/dev/null || true)
+  local name_cmd=(git -C "$ROOT" diff --name-only -z -- .)
   if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
-    name_cmd=(git -C "$ROOT" diff HEAD --name-only -- .)
+    name_cmd=(git -C "$ROOT" diff HEAD --name-only -z -- .)
   fi
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [[ -z "$f" ]] && continue
-    echo "$f" | grep -Eq "$is_gov" && continue
-    printf '%s\t%s\n' "$f" "tracked" >> "$list"
+    printf '%s\n' "$f" | grep -Eq "$is_gov" && continue
+    printf '%s\t%s\0' "$f" "tracked" >> "$list"
   done < <("${name_cmd[@]}" \
       ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
       ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
@@ -425,7 +431,7 @@ capture_diff() { # <outfile>
     const root = process.argv[4];
     const hasHead = process.argv[5] === "1";
     const rows = fs.existsSync(listFile)
-      ? fs.readFileSync(listFile, "utf8").replace(/\r/g, "").split("\n").filter(Boolean).map((l) => {
+      ? fs.readFileSync(listFile, "utf8").split("\0").filter(Boolean).map((l) => {
           const i = l.indexOf("\t");
           return { path: l.slice(0, i), kind: l.slice(i + 1) };
         })
@@ -447,9 +453,12 @@ capture_diff() { # <outfile>
         const head = Buffer.from(`\n--- new file (untracked): ${row.path} ---\n`);
         return Buffer.concat([head, Buffer.isBuffer(body) ? body : Buffer.from(String(body))]);
       }
+      // The path arrives verbatim now, so a name holding * or [ would be read
+      // as a wildcard and one starting with : as pathspec magic.
+      const spec = ":(literal)" + row.path;
       const args = hasHead
-        ? ["-C", root, "diff", "HEAD", "--", row.path]
-        : ["-C", root, "diff", "--", row.path];
+        ? ["-C", root, "diff", "HEAD", "--", spec]
+        : ["-C", root, "diff", "--", spec];
       const r = spawnSync("git", args, { encoding: null, maxBuffer: 32 * 1024 * 1024 });
       return r.stdout && r.stdout.length ? r.stdout : Buffer.alloc(0);
     };
@@ -462,7 +471,9 @@ capture_diff() { # <outfile>
     const chunks = [];
     for (const row of unique) {
       const buf = load(row);
-      if (!buf.length) continue;
+      // Listed as changed, but nothing came back. Name it in the manifest
+      // rather than dropping it: silence here reads as "reviewed and clean".
+      if (!buf.length) { omitted.push(row.path); continue; }
       if (used >= max) { omitted.push(row.path); continue; }
       const room = Math.min(share, max - used);
       if (room <= 0) { omitted.push(row.path); continue; }
@@ -478,7 +489,10 @@ capture_diff() { # <outfile>
         truncated.push(row.path);
       }
     }
-    if (n === 0) { fs.writeFileSync(out, ""); process.exit(0); }
+    // A manifest with no diff bytes behind it is not a diff. The empty-diff
+    // guard in the caller tests -s, and a lone footer satisfies it — the three
+    // reviewers would then rubber-stamp "nothing changed" as an implementation.
+    if (n === 0 || chunks.length === 0) { fs.writeFileSync(out, ""); process.exit(0); }
     const footer = [];
     footer.push("\n[review diff manifest]");
     footer.push("included: " + (included.length ? included.join(", ") : "(none)"));
@@ -541,6 +555,20 @@ block_issue() { # <root_id> <issue_id> <reason> — never silent: MEMORY.md, sta
     echo "$3"
   } >> "$MEMORY_FILE"
   echo "blocked: $2 — written to $MEMORY_FILE" >&2
+}
+
+# Paths `git stash -u` must not carry off. take_over discards the rejected
+# implementation, not the governance that routes the run, not the issue list,
+# and not the harness itself — but `stash -u` cannot tell them apart, and the
+# quickstart in SKILL.md commits only .gitignore, so an unmodified setup has
+# all of them untracked. Same set capture_diff keeps out of the review diff
+# (`is_gov` there), plus ISSUE_SOURCE and this script. info/exclude is not the
+# fix: it would ignore these paths in the user's own repo, which is why
+# MEMORY.md was copied out rather than excluded in the first place.
+preserve_paths() {
+  printf '%s\n' "$MEMORY_FILE" "$SOUL_FILE" "$AGENTS_FILE" "$SELF" \
+    "$ROOT/SYSTEM.md" "$ROOT/APPEND_SYSTEM.md" "$ROOT/CLAUDE.md" "$ROOT/.pi"
+  [[ "$ISSUE_SOURCE" == !* ]] || printf '%s\n' "$ISSUE_SOURCE"
 }
 
 # ----------------------------------------------------------------------- loop
@@ -930,15 +958,35 @@ Emit ONLY this JSON, no prose and no code fence:
         mkdir -p "$(dirname "$excl")"
         grep -qxF '.pipeline/' "$excl" 2>/dev/null || printf '%s\n' '.pipeline/' >> "$excl"
         stash_msg="pipeline: pre-take_over $issue_id-$RUN_ID"
-        # stash -u takes untracked MEMORY.md with it. Do not add MEMORY.md to
-        # info/exclude — that would ignore it in the user's repo. Copy out and
-        # write back so a later block_issue still appends to the existing history.
-        local gov_bak="$work/MEMORY.md.pre-stash"
-        [[ -f "$MEMORY_FILE" ]] && cp "$MEMORY_FILE" "$gov_bak"
+        # stash -u takes every untracked path with it, governance included.
+        # Copy the preserved set out and write it back: a later block_issue
+        # then still appends to the existing MEMORY.md history, the reviewers
+        # after this point still get SOUL.md, routing keeps reading a real
+        # AGENTS.md, and a rerun still finds tasks.md and this script. $work
+        # lives under .pipeline, which info/exclude already pins, so the copies
+        # survive the stash themselves. Restore merges into directories instead
+        # of replacing them — no rm on a caller-supplied path.
+        local bak="$work/pre-stash" p n=0
+        local -a kept=()
+        rm -rf "$bak"; mkdir -p "$bak"
+        while IFS= read -r p; do
+          [[ -e "$p" ]] || continue
+          n=$((n + 1)); kept+=("$p")
+          cp -R "$p" "$bak/$n"
+        done < <(preserve_paths)
         git -C "$ROOT" stash push -u -m "$stash_msg" >/dev/null 2>&1 \
           && echo "stashed working tree as $stash_msg" >&2 \
           || true
-        [[ -f "$gov_bak" ]] && cp "$gov_bak" "$MEMORY_FILE"
+        n=0
+        for p in ${kept[@]+"${kept[@]}"}; do
+          n=$((n + 1))
+          mkdir -p "$(dirname "$p")"
+          if [[ -d "$bak/$n" ]]; then
+            mkdir -p "$p"; cp -R "$bak/$n/." "$p/"
+          else
+            cp "$bak/$n" "$p"
+          fi
+        done
       fi
       ctrl_attempts=$MAX_CTRL
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state escalate "$PIPELINE_DIR" "$root" "$issue_id" >/dev/null
