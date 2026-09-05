@@ -3,7 +3,7 @@
 // the wrapper a project keeps carries no loop logic.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -42,6 +42,23 @@ test("every unit test file names at least one invariant, and every named id exis
 		const named = [...text.matchAll(/INV-\d\d/g)].map((m) => m[0]);
 		assert.ok(named.length > 0, `${file} names no invariant`);
 		for (const id of named) assert.ok(ids.has(id), `${file} names ${id}, which invariants.md does not define`);
+	}
+});
+
+test("skill reference links resolve inside the published package and name existing invariants", () => {
+	const packed = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).files;
+	const ids = new Set(entries.map((entry) => entry.id));
+	const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? walk(join(dir, entry.name)) : entry.name.endsWith(".md") ? [join(dir, entry.name)] : []);
+	for (const file of [...walk(join(root, "skills")), ...walk(join(root, "prompts"))]) {
+		const content = readFileSync(file, "utf8");
+		for (const [, href] of content.matchAll(/\[[^\]\n]+\]\(([^)\s]+)\)/g)) {
+			if (/^(?:[a-z]+:|#)/i.test(href)) continue;
+			const target = resolve(dirname(file), decodeURIComponent(href.split("#")[0]));
+			assert.ok(existsSync(target), `${relative(root, file)} has a broken link: ${href}`);
+			const path = relative(root, target).split(sep).join("/");
+			assert.ok(packed.some((entry) => path === entry || path.startsWith(`${entry}/`)), `${href} is not shipped with the skill`);
+		}
+		for (const [id] of content.matchAll(/INV-\d\d/g)) assert.ok(ids.has(id), `${relative(root, file)} refers to unknown ${id}`);
 	}
 });
 

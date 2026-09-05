@@ -1,6 +1,6 @@
 {
   "name": "pi-governance-pipeline",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Turns a PRD into project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md) and runs an issue-driven auto-develop pipeline from that governance: per-role model routing, independent multi-model review, severity-based gating, hard run budgets. The pipeline ships in the package; the skill configures it.",
   "keywords": [
     "pi-package",

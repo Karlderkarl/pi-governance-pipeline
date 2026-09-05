@@ -102,9 +102,11 @@ done
 [[ "$(grep -c '^### INV-' "$REFS/invariants.md")" -ge 25 ]] || fail "invariants.md lists fewer than 25 invariants"
 [[ ! -e "$REFS/pipeline-template.md" ]] || fail "pipeline-template.md must be gone; invariants.md and operations.md replaced it"
 [[ ! -e "$ROOT/skills/governance-pipeline/assets" ]] || fail "the bundled assets directory must be gone"
-grep -q 'doctor' "$ROOT/prompts/pipeline-audit.md" || fail "pipeline-audit.md does not run doctor"
-grep -q 'invariants.md' "$ROOT/prompts/pipeline-audit.md" || fail "pipeline-audit.md does not point at invariants.md"
-grep -q 'contract_version: 2' "$ROOT/prompts/govern.md" || fail "govern.md does not ask for a v2 contract"
+grep -q 'Mode: audit' "$ROOT/prompts/pipeline-audit.md" || fail "pipeline-audit.md does not select audit mode"
+grep -q 'audit.md' "$SKILL" || fail "SKILL.md does not route to the audit checklist"
+grep -q 'doctor' "$REFS/audit.md" || fail "audit.md does not run doctor"
+grep -q 'invariants.md' "$REFS/audit.md" || fail "audit.md lost its invariant lookup"
+grep -q 'Mode: govern' "$ROOT/prompts/govern.md" || fail "govern.md does not select govern mode"
 grep -q 'pipeline.mjs init' "$ROOT/prompts/automate.md" || fail "automate.md does not run init"
 if grep -q 'Start from' "$ROOT/prompts/automate.md"; then fail "automate.md still tells the model to start from a script"; fi
 
@@ -2046,7 +2048,7 @@ grep -q 'take_over' "$REFS/invariants.md" || fail "invariants.md never names tak
 grep -q 'implement_master' "$REFS/invariants.md" || fail "invariants.md never names implement_master"
 grep -q 'AGENTS.override.md' "$REFS/governance-files.md" || fail "governance-files.md does not mention AGENTS.override.md"
 grep -q 'MUST be gitignored' "$REFS/operations.md" || fail "operations.md must require gitignoring .pipeline/"
-grep -q 'MEMORY.md' "$ROOT/prompts/pipeline-audit.md" || fail "pipeline-audit.md does not ask whether blockers reached MEMORY.md"
+grep -q 'MEMORY.md' "$REFS/audit.md" || fail "audit.md does not ask whether blockers reached MEMORY.md"
 grep -q 'no fenced YAML block parsed' "$REFS/contract.md" || fail "contract.md missing the unparsed-block error"
 grep -q 'decision marker' "$REFS/contract.md" || fail "contract.md does not explain decision markers"
 grep -q 'contract_version: 2' "$REFS/contract.md" || fail "contract.md example is not v2"
@@ -2058,8 +2060,8 @@ grep -q 'no live verification' "$ROOT/README.md" || fail "README must state the 
 if grep -rliE 'PIPELINE_USAGE|PIPELINE_PRICES|total_cost_usd|--mode json|cacheRead' "$ROOT/bin" "$ROOT/lib" "$ROOT/extensions" "$ROOT/skills" "$ROOT/prompts" "$ROOT/README.md" >/dev/null; then
   fail "token or cost metering is back in the shipped files: $(grep -rliE 'PIPELINE_USAGE|PIPELINE_PRICES|total_cost_usd|--mode json|cacheRead' "$ROOT/bin" "$ROOT/lib" "$ROOT/extensions" "$ROOT/skills" "$ROOT/prompts" "$ROOT/README.md")"
 fi
-if grep -q 'MEMORY.md\` is copied out and written back' "$ROOT/prompts/pipeline-audit.md"; then
-  fail "pipeline-audit.md still describes the pre-1.0.16 stash protection (MEMORY.md only)"
+if grep -q 'MEMORY.md\` is copied out and written back' "$REFS/audit.md"; then
+  fail "audit.md still describes the pre-1.0.16 stash protection (MEMORY.md only)"
 fi
 
 # ---------------------------------------------------------------- guard behaviour (F4, F5, F11)

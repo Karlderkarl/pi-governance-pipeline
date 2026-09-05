@@ -37,18 +37,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.2.0
+pi install npm:pi-governance-pipeline@1.2.1
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.0
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.1
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.2.0
+pi -e npm:pi-governance-pipeline@1.2.1
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.0
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.1
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -69,13 +69,16 @@ for the tested Pi 0.85.1). Bash and git are required; use Git Bash on Windows.
 |---|---|
 | `/govern [path-to-PRD]` | Generate or audit `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `MEMORY.md` (and `.pi/APPEND_SYSTEM.md`; `CLAUDE.md` when Claude Code runs a role) |
 | `/automate [--harness <spec>] [--local] [--force]` | Validate first, then set up wrapper, `.gitignore` and issue file; dry-run the pipeline |
-| `/pipeline-audit` | `pipeline doctor` and `status`, explained against the invariants |
+| `/pipeline-audit` | `pipeline doctor` and `status`, plus a read-only project-readiness checklist |
 | `/pipeline-status` | Counters, tree budget, per-issue state (extension command) |
 | `/skill:governance-pipeline` | Load the skill directly |
 
 The skill can also be selected when you ask to generate or audit governance from a PRD,
 or to set up, run or audit the pipeline. A repository containing `AGENTS.md` alone is
-not a reason to load it.
+not a reason to load it. Slash prompts select a mode and pass arguments; the skill
+holds the workflow rules. It loads only the references needed for that mode.
+Routine audits use a short checklist; the full engine invariants are a lookup
+reference for unresolved behavior questions.
 
 Typical first run:
 
@@ -122,14 +125,19 @@ lib/
 extensions/pipeline-guard.ts   interactive guard, /pipeline-status, pipeline_state tool
 skills/governance-pipeline/
   SKILL.md                     three modes: govern, automate, audit
+  references/audit.md          short, read-only project-readiness checklist
   references/contract.md       contract v2
   references/governance-files.md
   references/operations.md     flags, variables, layout, threat model
   references/invariants.md     INV-01 … INV-29, each with the test that pins it
-  references/prompt-builders.md
 prompts/                       /govern, /automate, /pipeline-audit
-docs/PRD-harness.md            (repository only, not packed) — the PRD this package answers
+docs/                         repository only, not packed
+  PRD-harness.md               the PRD this package answers
+  prompt-builders.md           engine prompt design for maintainers
 ```
+
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.1/docs/prompt-builders.md).
+This repository-only document is not required to use the installed skill.
 
 ## The contract
 
@@ -251,9 +259,14 @@ PI_LIVE_MODEL="provider/model:low" node tests/pi-live.mjs
 This packs and installs the artifact in a temporary project, loads its extension
 through real Pi, calls `pipeline_state`, and checks a deliberately unsafe fixture
 through a real reviewer, the severity gate and a tool-free master. It never edits
-your Pi settings or installs the package globally. The 1.2.0 check passed on Pi
+your Pi settings or installs the package globally. The 1.2.1 check passed on Pi
 0.85.1 with `openrouter/openai/gpt-5-mini:low`. It verifies live wiring and provider
 authentication, not the quality or independence of a full multi-provider panel.
+
+For 1.2.1, a separate read-only Pi review approved the corrected candidate with no
+findings. Local validation passed 87 tests (including the real Pi SDK checks),
+the full smoke suite and ShellCheck. See the [release review](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.1/docs/review-2026-09-05-1.2.1.md)
+for findings, their disposition and the limits of these checks.
 
 CI is configured to run both on Ubuntu (node 18 and 22) and Windows (node 22). The Claude Code
 adapter is verified against a stub and `claude --help`; it has no live verification in this release.

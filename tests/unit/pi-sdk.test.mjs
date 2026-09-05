@@ -11,8 +11,24 @@ import { initCommand } from "../../lib/cli/init.mjs";
 import { createProject } from "../fixtures/project.mjs";
 
 const sdkDir = process.env.PI_TEST_SDK_DIR;
-const skip = !sdkDir ? "set PI_TEST_SDK_DIR to run against the real Pi SDK" : Number(process.versions.node.split(".")[0]) < 22 ? "Pi 0.85 requires Node >=22.19" : false;
+const supportsPiSdk = (version) => {
+	const [major, minor] = version.split(".").map(Number);
+	return major > 22 || (major === 22 && minor >= 19);
+};
+const skip = !sdkDir ? "set PI_TEST_SDK_DIR to run against the real Pi SDK" : !supportsPiSdk(process.versions.node) ? "Pi 0.85 requires Node >=22.19" : false;
 const sdk = (path) => import(pathToFileURL(join(sdkDir, "dist", path)).href);
+const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
+
+async function loadPackagePrompts() {
+	const { loadPromptTemplates } = await sdk("core/prompt-templates.js");
+	return loadPromptTemplates({ cwd: packageRoot, agentDir: packageRoot, promptPaths: [join(packageRoot, "prompts")], includeDefaults: false });
+}
+
+test("Pi SDK runtime gate respects the Node 22.19 minimum", () => {
+	for (const [version, expected] of [["18.20.8", false], ["20.19.0", false], ["22.0.0", false], ["22.18.0", false], ["22.19.0", true], ["22.23.2", true], ["24.0.0", true], ["26.8.1", true]]) {
+		assert.equal(supportsPiSdk(version), expected, version);
+	}
+});
 
 test("Pi discovers the skill without frontmatter diagnostics", { skip }, async () => {
 	const { loadSkillsFromDir } = await sdk("core/skills.js");
@@ -26,9 +42,7 @@ test("Pi discovers the skill without frontmatter diagnostics", { skip }, async (
 test("Pi expands every automate argument and init applies the requested configuration", { skip }, async () => {
 	const { expandPromptTemplate } = await sdk("core/prompt-templates.js");
 	const root = createProject();
-	const templatePath = join(dirname(fileURLToPath(import.meta.url)), "../../prompts/automate.md");
-	const content = readFileSync(templatePath, "utf8").replace(/^---[\s\S]*?---\s*/, "");
-	const templates = [{ name: "automate", content }];
+	const templates = await loadPackagePrompts();
 	for (const input of ["", " --harness anthropic=claude-code --local"]) {
 		const expanded = expandPromptTemplate(`/automate${input}`, templates);
 		const command = expanded.match(/`node <package>\/bin\/pipeline\.mjs init ([^`]*)`/)[1];
@@ -40,6 +54,26 @@ test("Pi expands every automate argument and init applies the requested configur
 			assert.match(wrapper, /--harness anthropic=claude-code/);
 		}
 	}
+});
+
+test("Pi discovers all mode prompts and preserves explicit and omitted PRD arguments", { skip }, async () => {
+	const { expandPromptTemplate } = await sdk("core/prompt-templates.js");
+	const templates = await loadPackagePrompts();
+	const skill = readFileSync(join(packageRoot, "skills/governance-pipeline/SKILL.md"), "utf8");
+	assert.deepEqual(templates.map((template) => template.name).sort(), ["automate", "govern", "pipeline-audit"]);
+	for (const [name, mode] of [["automate", "automate"], ["govern", "govern"], ["pipeline-audit", "audit"]]) {
+		const template = templates.find((entry) => entry.name === name);
+		assert.ok(template.description, `${name} has no discovery description`);
+		assert.ok(expandPromptTemplate(`/${name}`, templates).includes(`Mode: ${mode}`), `${name} does not select ${mode}`);
+		assert.ok(skill.includes(`## Mode: ${mode}`), `${name} selects a mode absent from the skill`);
+	}
+	for (const path of ["docs/PRD.md", "docs/My PRD.md"]) {
+		const expanded = expandPromptTemplate(`/govern "${path}"`, templates);
+		assert.equal(expanded.match(/^PRD: (.+)$/m)[1], path);
+	}
+	const fallback = expandPromptTemplate("/govern", templates);
+	assert.match(fallback, /^PRD: .+$/m);
+	assert.doesNotMatch(fallback, /\$\{1:-/);
 });
 
 test("Pi excludes custom system prompts and executable extensions for every non-implementer", { skip }, async () => {

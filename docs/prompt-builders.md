@@ -1,6 +1,6 @@
-# Prompts
+# Engine prompt design
 
-One prompt per role, one process per prompt, a fresh context every time. The fixed text of every prompt is a template in the package (`lib/prompts/templates/<role>.md`), reviewable as text; `lib/prompts/build.mjs` fills in the run's data. Projects do not override the templates — project context reaches the roles through `SOUL.md`. What follows is what each role receives and why.
+Maintainer reference; not needed to configure or audit a project. One prompt per role, one process per prompt, a fresh context every time. The fixed text lives in [`lib/prompts/templates/`](../lib/prompts/templates/); [`lib/prompts/build.mjs`](../lib/prompts/build.mjs) fills in the run's data. Projects do not override the templates. What follows is what each role receives and why.
 
 ## Contents
 
@@ -14,11 +14,11 @@ One prompt per role, one process per prompt, a fresh context every time. The fix
 
 ## Shared rules
 
-Every prompt gets: the issue text, the relevant governance excerpt, and nothing else it does not need. Never the whole repository, never the session history, never another role's verdict.
+Each prompt receives only its role-specific inputs, listed below, without the previous session's history. Independent reviewers never receive sibling verdicts; the controller and master explicitly receive reviewer outputs. Tool-bearing roles can inspect the repository within their harness's permissions.
 
-Issue text and diff are **untrusted input**. The issue can come from `gh` or Jira, and the diff was written by a model. Both are framed as the thing being judged, never as instructions — a diff that asks the panel for an empty `findings` list would otherwise clear three independent reviewers and a real gate. Framing is a mitigation, not a boundary (`operations.md`, Safety).
+Issue text and diff are **untrusted input**. The issue can come from `gh` or Jira, and the diff was written by a model. Both are framed as the thing being judged, never as instructions — a diff that asks the panel for an empty `findings` list would otherwise clear three independent reviewers and a real gate. Framing is a mitigation, not a boundary; see [operations: safety](../skills/governance-pipeline/references/operations.md#safety).
 
-A role learns its attempt count only as "you have N attempts left". The prompt is fed on stdin, and one rendered prompt per attempt is archived under `.pipeline/prompts/<root>/`.
+Implementers receive their remaining attempts as "you have N attempts left"; the master receives the current attempt number. Prompts are fed on stdin and archived per role and attempt under `.pipeline/prompts/<root>/`.
 
 ## research
 
@@ -38,7 +38,7 @@ Line numbers are stripped because `implement_master` does not receive the diff; 
 
 ## reviewers
 
-Three roles, three processes, three contexts. Each receives the issue, the diff (truncated per file, omitted paths named in a manifest), its own slice of `SOUL.md`, the severity definitions, and the output schema. None receives another's verdict, and none is told how many reviewers exist or which model implemented. The isolation flags per harness are in `operations.md`.
+Three roles, three processes, three contexts. Each receives the issue, the diff (truncated per file, omitted paths named in a manifest), the same first 120 lines of `SOUL.md`, the severity definitions, and the output schema, with its own review focus. None receives another's verdict, and none is told how many reviewers exist or which model implemented. See [operations](../skills/governance-pipeline/references/operations.md) for the isolation flags per harness.
 
 | Role | Focus |
 |---|---|
@@ -69,8 +69,8 @@ The gate depends on this being machine-readable. The reviewer is told to emit **
 }
 ```
 
-- `verdict`: `approve` | `reject` — advisory; severity decides the gate. The word decides only whether the reviewer gets its one retry. The retry is a fresh process with no memory of the first pass, so it replaces the original only if it parses at least as well **and** its worst finding is at least as severe.
-- `severity`: `critical` | `high` | `medium` | `low` — anything else (a trailing space, a synonym like `blocker`) blocks; the gate never drops unknown severities.
+- `verdict`: `approve` | `reject` — advisory; severity decides the gate. The word decides only whether the reviewer gets its one retry. The retry is a fresh process with no memory of the first pass, so it replaces the original only if its parse-quality rank strictly improves **and** its worst finding is at least as severe.
+- `severity`: `critical` | `high` | `medium` | `low` — case and surrounding whitespace are normalized. Unknown values such as `blocker` still block; the gate never drops unknown severities.
 - `line`: integer or `null` when file-level. `findings`: empty array when nothing found.
 
 Severity definitions are in the prompt, not in the reviewer's head: **critical** exploitable now, data loss, or fundamentally broken · **high** a real bug or vulnerability under plausible conditions · **medium** should be fixed, shipping without it is defensible · **low** style, polish, nitpick.
