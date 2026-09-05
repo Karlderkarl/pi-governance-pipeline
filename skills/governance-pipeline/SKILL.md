@@ -34,12 +34,13 @@ cp <skill>/assets/auto-develop.sh . && chmod +x auto-develop.sh
 node .pipeline/lib/governance.mjs config AGENTS.md   # validate before the first run
 printf -- '- [ ] issue-1: first task\n' > tasks.md     # dry-run reads this; without it it dies
 grep -qxF '.pipeline/' .gitignore 2>/dev/null || echo '.pipeline/' >> .gitignore   # before the first run, not after
+git add -A && git commit -qm "governance + pipeline"  # a real run refuses to start without a HEAD: take_over stashes against it, approvals commit on it
 ./auto-develop.sh --dry-run                          # routing and prompts, zero model calls; notes if pi is missing
 ```
 
 **Both gate commands ship empty.** `LINT_CMD` and `TEST_CMD` have no defaults — a project's gates cannot be guessed. An unadapted script therefore satisfies "deterministic gates run before any model-based review" with nothing to run, and `--dry-run` cannot show it because the gates sit behind the dry-run guard. The script says so once at start (`warning: neither LINT_CMD nor TEST_CMD is set`) and records `gates` in every JSONL log event, so a finished run stays auditable. Adapting them is not optional.
 
-**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the commit/PR/governance-update step (a marked stub, including `--auto-merge`). Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
+**Reference scope.** The bundled script implements the full loop except issue splitting (it blocks instead), the clean-code gate (fold it into `LINT_CMD` — e.g. a complexity or duplication linter; there is no separate slot), and the PR/governance-update step plus `--auto-merge` (marked stubs). Approved work **is** committed: `commit_approved` (marked `ADAPT`) commits exactly the reviewed paths plus the issue source, so the next issue reviews only its own diff and a later `take_over` cannot stash approved work away. `COMMIT_APPROVED=0` disables that commit; the run then stops after the first approval instead of carrying it into the next issue. Those are deliberate adaptation points — `references/pipeline-template.md` says what a generator must add. `/pipeline-audit` checks a *generated* pipeline against the invariants.
 
 The package also ships `pipeline-guard`, an extension that blocks privileged bash commands and unconfirmed governance writes, exposes the `pipeline_state` tool, and adds `/pipeline-status`. It is a speed bump, not a sandbox — see the package README. It is the interactive counterpart to the script's startup gate.
 
@@ -58,6 +59,8 @@ The package also ships `pipeline-guard`, an extension that blocks privileged bas
 | `ROLE_TIMEOUT_SECONDS` | Cap around each `pi -p` (GNU `timeout`, else `gtimeout`, else unprotected). `0` disables. A timeout empties the outfile so the role is unavailable |
 | `PROMPT_KEEP_RUNS` | Distinct run-ids to keep under `.pipeline/prompts/`; older prompt files are deleted |
 | `BLOCKER_HISTORY_MAX` | Last N `MEMORY.md` blocker entries for the current issue, fed into research and implement prompts |
+| `BLOCKER_HISTORY_MAX_BYTES` | Byte cap on that history (newest text kept); a blocker that carried a tool log must not re-enter every later prompt whole |
+| `COMMIT_APPROVED` | `1` (default) commits the reviewed paths plus the issue source after an approval. `0` leaves the tree as is and stops the run after the first approval, because the next issue would review that approval as its own diff and a `take_over` would stash it |
 
 **`eval` is the issue source.** `ISSUE_SOURCE=!command`, `LINT_CMD`, and `TEST_CMD` run through `eval` and are all env-overridable. That is deliberate (one-line adaptation to `gh` or Jira) — it also means the run's environment is a shell, with or without `pipeline-guard`.
 
@@ -111,7 +114,8 @@ The generated pipeline runs this loop per issue:
 ```
 research ─▶ implement/TDD ─▶ deterministic gates (lint, tests) ─▶ 3 parallel reviews
    ─▶ controller (aggregates, proposes) ─▶ master review (decides, always runs)
-        ├─ approved   ─▶ governance update ─▶ next issue
+        ├─ approved   ─▶ commit the reviewed paths ─▶ next issue
+        │                 (PR and governance update: adaptation points)
         ├─ rejected   ─▶ back to implement; after max_attempts_controller the
         │                 next attempt is implement_master (not a block).
         │                 Splitting is a generator adaptation point; the bundled
@@ -136,7 +140,7 @@ These hold in every generated pipeline. If a requested change would break one, s
 - *attempts* — a quality signal, per issue, reset when an issue is split
 - *budget* — a resource limit, held at the tree root, consumed across the whole tree, never reset
 
-**Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` are recorded as follow-ups in the gate JSON and fed back on retry. The bundled script does not open tickets for them — that is a generator adaptation point. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
+**Review gating is severity-based**, not a percentage. Any `critical` or `high` blocks; `medium` and `low` are recorded as follow-ups in the gate JSON and fed back on retry. The two lists must together cover all four severities (a contract error otherwise), and a known severity that appears in neither list blocks at the gate — "not written down" is not "does not block". The bundled script does not open tickets for follow-ups — that is a generator adaptation point. Percentage thresholds over three reviewers collapse into unanimity and hide that fact.
 
 **The controller proposes; the master decides.** The controller runs a weak model and may miscount. The master sees the original reviewer JSON, not just the controller's summary. The master cannot approve over a blocking gate: a deterministic severity fail outranks the model verdict. When the master's output contains more than one parseable decision object, the strictest wins (`take_over` > `reject` > `approve`), so a fragment appended after the real object cannot upgrade the verdict. Echoing the prompt's own example costs nothing — its `decision` reads `approve|reject|take_over`, which is not a valid word. A stray stricter value does cost an attempt; that is the cheap direction to fail in.
 
@@ -186,7 +190,9 @@ Research notes are cached per issue in the work directory. A bad first research 
 
 When the master implements a fix itself, it starts **fresh from the issue** with prior findings as an exclusion list — not from the failed diff. Inheriting the broken diff inherits the reasoning that already failed three times; a different model is only useful if it gets to think differently. Blocking findings are stored separately from lint/test output and are never displaced by a chatty linter; they are rewritten as prose (file + title/rationale, no line numbers) because `implement_master` does not receive the diff.
 
-An abort is never silent: mark the issue blocked, write the blocker to `MEMORY.md`, notify a human. The next research and implement prompts for that issue receive the last N blocker entries from `MEMORY.md`. The state file already skips `blocked` issues; the MEMORY excerpt is the *content* of the history, not the skip itself.
+An abort is never silent: mark the issue blocked, write the blocker to `MEMORY.md`, notify a human. The blocker entry carries the unresolved review findings as prose (file and title, no line numbers) and only the tail of the tool log — not the whole log, which would re-enter every later prompt. The next research and implement prompts for that issue receive the last N blocker entries from `MEMORY.md`, capped in bytes (`BLOCKER_HISTORY_MAX_BYTES`). The state file already skips `blocked` issues; the MEMORY excerpt is the *content* of the history, not the skip itself.
+
+`take_over` stashes the rejected tree with `git stash -u`, which would also take every untracked governance file, the issue source and the script itself. The reference copies that set out beforehand and writes it back afterwards; a refused stash (for example, no commit yet) is reported on stderr, never swallowed. The same set — governance files, `AGENTS.override.md`, `.pipeline/`, `.pi/`, the issue source, the script — stays out of the review diff, so a fresh issue that starts on a dirty tree is warned about rather than judged for someone else's changes.
 
 `.pipeline/` holds plaintext diffs and prompts and **must be gitignored**. The script warns at start if it is not, and prunes `.pipeline/prompts/` down to `PROMPT_KEEP_RUNS` distinct run ids.
 

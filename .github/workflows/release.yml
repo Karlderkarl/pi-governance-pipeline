@@ -40,8 +40,10 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Trusted publishing needs a recent npm; setup-node's bundled version
-      # is not guaranteed to be new enough.
-      - run: npm install -g npm@latest
+      # is not guaranteed to be new enough. Pinned to a major: the workflow
+      # avoids long-lived tokens on purpose, so the client it publishes with
+      # must not be whatever the registry served that minute either.
+      - run: npm install -g npm@11
 
       # The value of this package is the correctness of its assets — never
       # publish a tarball whose script or libraries fail the smoke test.

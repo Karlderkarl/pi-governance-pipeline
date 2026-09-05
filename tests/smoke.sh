@@ -1000,7 +1000,11 @@ out="$(cd "$proj7" && PATH="$stub:$PATH" PI_CALLS_LOG="$TMP/calls7.log" \
   LINT_CMD='i=0; while [ $i -lt 300 ]; do i=$((i+1)); echo "lint-line-$i"; done; false' \
   bash auto-develop.sh 2>&1)" || rc=$?
 [[ "$rc" -ne 0 ]] || fail "persistent lint failure should block, not pass"
-last_prompt="$(ls -t "$proj7"/.pipeline/prompts/issue-7/issue-7-implement*.txt | head -1)"
+# By name, not mtime: in the C locale `_master` sorts after `-a0N` and a06
+# after a05, so the last name is the newest prompt even on a filesystem with
+# 1 s mtime granularity. A UTF-8 locale collates punctuation away and would
+# pick implement-a03 instead.
+last_prompt="$(ls "$proj7"/.pipeline/prompts/issue-7/issue-7-implement*.txt | LC_ALL=C sort | tail -1)"
 grep -q "older blocks omitted" "$last_prompt" \
   || fail "exclusion cap marker missing in the implement prompt"
 if grep -q "kept]lint-line" "$last_prompt"; then fail "cap marker glued to the first kept line"; fi
@@ -2022,5 +2026,250 @@ grep -q 'unknown contract key' "$ROOT/skills/governance-pipeline/references/cont
   || fail "contract.md validation list missing unknown-key warnings"
 grep -q 'no fenced YAML block parsed' "$ROOT/skills/governance-pipeline/references/contract.md" \
   || fail "contract.md missing the unparsed-block error"
+grep -q 'COMMIT_APPROVED' "$ROOT/skills/governance-pipeline/SKILL.md" \
+  || fail "SKILL.md does not document COMMIT_APPROVED"
+grep -q 'COMMIT_APPROVED' "$ROOT/README.md" || fail "README does not document COMMIT_APPROVED"
+grep -q 'BLOCKER_HISTORY_MAX_BYTES' "$ROOT/README.md" || fail "README does not document BLOCKER_HISTORY_MAX_BYTES"
+if grep -q 'MEMORY.md` is copied out and written back' "$ROOT/prompts/pipeline-audit.md"; then
+  fail "pipeline-audit.md still describes the pre-1.0.16 stash protection (MEMORY.md only)"
+fi
+
+# ---------------------------------------------------------------- guard behaviour (F4, F5, F11)
+# The regexes in pipeline-guard.ts used to be typechecked only. Run the
+# extension under node's type stripping against stub SDK packages.
+if node -e 'const [a,b]=process.versions.node.split(".").map(Number); process.exit(a>22||(a===22&&b>=6)?0:1)'; then
+  node --experimental-strip-types "$ROOT/tests/guard.test.mjs" "$ROOT" "$TMP" >"$TMP/guard-test.out" 2>"$TMP/guard-test.err" \
+    || fail "pipeline-guard behaviour test failed: $(cat "$TMP/guard-test.err")"
+  grep -q "guard behaviour OK" "$TMP/guard-test.out" || fail "guard test did not report OK: $(cat "$TMP/guard-test.out")"
+else
+  echo "smoke: node < 22.6, skipping the pipeline-guard behaviour test" >&2
+fi
+
+# ---------------------------------------------------------------- F1: a retry that parses better but carries less keeps the original
+# Original: findings with a critical but an off-schema verdict word (--check 2).
+# Retry: clean approve with no findings (--check 0). Rank alone would take the
+# retry and lose the critical; the severity comparison keeps the original.
+proj_rl="$TMP/run-retry-less"; mkdir -p "$proj_rl/.pipeline/lib"
+cp "$SH" "$proj_rl/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_rl/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_rl/AGENTS.md"
+printf -- "- [ ] issue-rl: retry carries less\n" > "$proj_rl/tasks.md"
+git_init "$proj_rl"
+stub_rl="$TMP/stub-rl"; mkdir -p "$stub_rl"
+cat > "$stub_rl/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  *REMINDER*) echo '{"role":"security","verdict":"approve","findings":[]}' ;;
+  "You review a diff for one concern only: security"*)
+    echo '{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE-keep","rationale":"r","suggestion":"s"}]}' ;;
+  "You review a diff for one concern only:"*) echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_rl/pi"
+rc=0
+out="$(cd "$proj_rl" && PATH="$stub_rl:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "a retry that dropped a critical cleared the gate: $out"
+if echo "$out" | grep -q "^approved: issue-rl"; then fail "retry-carries-less approved the issue: $out"; fi
+echo "$out" | grep -q "retry discarded" || fail "retry that carries less was not discarded: $out"
+grep -q 'RCE-keep' "$proj_rl/.pipeline/work/issue-rl/gate.json" \
+  || fail "critical finding lost to a cleaner but emptier retry: $(cat "$proj_rl/.pipeline/work/issue-rl/gate.json")"
+# --check prints the worst severity rank on stdout.
+[[ "$(node "$LIB/gate.mjs" --check "$TMP/r-crit.json" 2>/dev/null)" == "3" ]] || fail "--check did not print the worst rank (critical = 3)"
+[[ "$(node "$LIB/gate.mjs" --check "$TMP/r-ok.json" 2>/dev/null)" == "-1" ]] || fail "--check did not print -1 for no findings"
+
+# ---------------------------------------------------------------- F2: approved work is committed; the next issue reviews only its own diff
+proj_cm="$TMP/run-commit"; mkdir -p "$proj_cm/.pipeline/lib"
+cp "$SH" "$proj_cm/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_cm/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_cm/AGENTS.md"
+printf -- "- [ ] issue-a: first\n- [ ] issue-b: second\n" > "$proj_cm/tasks.md"
+git_init "$proj_cm"
+stub_cm="$TMP/stub-cm"; mkdir -p "$stub_cm"
+cat > "$stub_cm/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*)
+    if grep -q "issue-a" <<<"$last"; then printf 'WORK-OF-ISSUE-A\n' > ./a.txt; else printf 'WORK-OF-ISSUE-B\n' > ./b.txt; fi ;;
+  "You review a diff"*) echo '{"role":"r","verdict":"approve","findings":[]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*)
+    if grep -q "issue-b" <<<"$last" && [[ ! -f .pipeline/work/issue-b/.took ]]; then
+      mkdir -p .pipeline/work/issue-b; touch .pipeline/work/issue-b/.took
+      echo '{"decision":"take_over","reasons":["wrong approach"]}'
+    else
+      echo '{"decision":"approve","reasons":["ok"]}'
+    fi ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_cm/pi"
+rc=0
+out="$(cd "$proj_cm" && PATH="$stub_cm:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -eq 0 ]] || fail "commit run failed (rc=$rc): $out"
+echo "$out" | grep -q "^approved: issue-a" || fail "issue-a not approved: $out"
+echo "$out" | grep -q "^approved: issue-b" || fail "issue-b not approved: $out"
+echo "$out" | grep -q "stashed working tree" || fail "issue-b take_over did not stash: $out"
+[[ -f "$proj_cm/a.txt" ]] || fail "issue-b's take_over stashed the approved work of issue-a away"
+[[ "$(git -C "$proj_cm" log --oneline | grep -c 'pipeline: issue-')" -eq 2 ]] \
+  || fail "approved issues were not committed: $(git -C "$proj_cm" log --oneline)"
+git -C "$proj_cm" show --stat HEAD~1 | grep -q 'a.txt' || fail "issue-a's commit does not contain a.txt"
+git -C "$proj_cm" show --stat HEAD~1 | grep -q 'tasks.md' || fail "issue-a's commit does not carry the tasks.md checkbox"
+first_b="$(ls "$proj_cm"/.pipeline/prompts/issue-b/issue-b-review_security-a01-* | head -1)"
+if grep -q "WORK-OF-ISSUE-A" "$first_b"; then fail "issue-b's reviewers saw issue-a's diff"; fi
+if grep -q 'tasks.md' "$proj_cm/.pipeline/work/issue-b/diff.patch"; then fail "the issue source reached the review diff"; fi
+[[ -z "$(git -C "$proj_cm" status --porcelain)" ]] || fail "tree not clean after two committed approvals: $(git -C "$proj_cm" status --porcelain)"
+
+# COMMIT_APPROVED=0: the run stops after the first approval instead of carrying it on.
+proj_nc="$TMP/run-nocommit"; mkdir -p "$proj_nc/.pipeline/lib"
+cp "$SH" "$proj_nc/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_nc/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_nc/AGENTS.md"
+printf -- "- [ ] issue-a: first\n- [ ] issue-b: second\n" > "$proj_nc/tasks.md"
+git_init "$proj_nc"
+rc=0
+out="$(cd "$proj_nc" && PATH="$stub_ok:$PATH" COMMIT_APPROVED=0 bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "COMMIT_APPROVED=0 with a second issue must exit non-zero: $out"
+echo "$out" | grep -q "^approved: issue-a" || fail "COMMIT_APPROVED=0: issue-a not approved: $out"
+if echo "$out" | grep -q "^approved: issue-b"; then fail "COMMIT_APPROVED=0 still ran issue-b on top of issue-a's tree"; fi
+echo "$out" | grep -q "^stopped: COMMIT_APPROVED=0" || fail "COMMIT_APPROVED=0 did not explain the stop: $out"
+echo "$out" | grep -q "^not started: issue-b" || fail "COMMIT_APPROVED=0 did not name the unstarted issue: $out"
+[[ "$(git -C "$proj_nc" log --oneline | wc -l)" -eq 1 ]] || fail "COMMIT_APPROVED=0 still committed"
+
+# A dirty tree before a fresh issue is announced, not silently reviewed.
+printf 'stray change\n' >> "$proj_nc/AGENTS.md"    # governance: excluded, must not trigger
+printf 'stray change\n' > "$proj_nc/stray.txt"      # implementation-looking: must trigger
+printf -- "- [ ] issue-c: third\n" > "$proj_nc/tasks.md"
+rc=0
+out="$(cd "$proj_nc" && PATH="$stub_ok:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+echo "$out" | grep -q "already differs from HEAD before the first attempt of issue-c" \
+  || fail "dirty tree before a fresh issue produced no warning: $out"
+echo "$out" | grep -q "stray.txt" || fail "dirty-tree warning does not name the path: $out"
+if echo "$out" | grep "already differs" | grep -q "AGENTS.md"; then fail "dirty-tree warning counted a governance file"; fi
+
+# ---------------------------------------------------------------- F3: severity lists must partition; an unlisted known severity blocks
+bad 'review:
+  blocking_severities: [critical]
+  followup_severities: [low]'
+printf '# A\n```yaml\nreview:\n  blocking_severities: [critical, high]\n  followup_severities: [high, medium, low]\n```\n' > "$TMP/overlap.md"
+node "$LIB/governance.mjs" config "$TMP/overlap.md" >/dev/null 2>"$TMP/overlap.err" \
+  || fail "overlapping severity lists must validate (blocking wins)"
+grep -q "both blocking and follow-up" "$TMP/overlap.err" || fail "overlapping severity lists produced no warning"
+rc=0; node "$LIB/gate.mjs" --blocking critical --followup low --min-reviewers 2 "$TMP/r-high.json" "$TMP/r-ok.json" > "$TMP/gate-unlisted.json" || rc=$?
+[[ $rc -eq 4 ]] || fail "a high finding with high in neither list cleared the gate (got $rc)"
+grep -q '"unlisted_severity"' "$TMP/gate-unlisted.json" || fail "unlisted severity not reported in gate JSON"
+grep -q '"verdict": "blocked"' "$TMP/gate-unlisted.json" || fail "unlisted severity must block"
+
+# ---------------------------------------------------------------- F5: AGENTS.override.md and the harness stay out of the review diff
+# Quickstart state: only .gitignore committed, governance, tasks.md and the
+# script untracked, plus an untracked AGENTS.override.md.
+proj_ov2="$TMP/run-override-diff"; mkdir -p "$proj_ov2/.pipeline/lib"
+cp "$SH" "$proj_ov2/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_ov2/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_ov2/AGENTS.md"
+printf '# override\nOVERRIDE-MARKER\n' > "$proj_ov2/AGENTS.override.md"
+printf -- "- [ ] issue-ov2: override in tree\n" > "$proj_ov2/tasks.md"
+printf 'export const a = 1;\n' > "$proj_ov2/src.ts"
+printf '.pipeline/\n' > "$proj_ov2/.gitignore"
+git -C "$proj_ov2" init -q
+git -C "$proj_ov2" add .gitignore
+git -C "$proj_ov2" -c user.email=t@t -c user.name=t commit -qm init
+out="$(cd "$proj_ov2" && bash auto-develop.sh --dry-run 2>&1)" || fail "override-diff dry-run failed: $out"
+ov_prompt="$(ls "$proj_ov2"/.pipeline/prompts/issue-ov2/issue-ov2-review_security-* | head -1)"
+if grep -q "OVERRIDE-MARKER" "$ov_prompt"; then fail "AGENTS.override.md content reached a reviewer prompt"; fi
+ov_inc="$(grep -o 'included:.*' "$ov_prompt" | head -1)"
+if printf '%s\n' "$ov_inc" | grep -qE '(^included: |, )AGENTS\.override\.md'; then fail "AGENTS.override.md listed in the manifest: $ov_inc"; fi
+if printf '%s\n' "$ov_inc" | grep -qE '(^included: |, )auto-develop\.sh'; then fail "the pipeline script itself is in the review diff: $ov_inc"; fi
+if printf '%s\n' "$ov_inc" | grep -qE '(^included: |, )tasks\.md'; then fail "the issue source is in the review diff: $ov_inc"; fi
+printf '%s\n' "$ov_inc" | grep -q 'src[.]ts' || fail "the real change was filtered out: $ov_inc"
+
+# ---------------------------------------------------------------- F7: no initial commit refuses a real run, notes on dry-run
+proj_nh="$TMP/run-nohead"; mkdir -p "$proj_nh/.pipeline/lib"
+cp "$SH" "$proj_nh/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_nh/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_nh/AGENTS.md"
+printf -- "- [ ] issue-nh: no head\n" > "$proj_nh/tasks.md"
+git -C "$proj_nh" init -q
+rc=0
+out="$(cd "$proj_nh" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-nh.log" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "a repo without a commit started a real run: $out"
+echo "$out" | grep -q "no commit yet" || fail "missing HEAD not named: $out"
+if [[ -f "$TMP/calls-nh.log" ]]; then fail "missing HEAD still invoked pi"; fi
+out="$(cd "$proj_nh" && bash auto-develop.sh --dry-run 2>&1)" || fail "dry-run without HEAD died: $out"
+echo "$out" | grep -q "no commit yet" || fail "dry-run without HEAD did not note it: $out"
+grep -q 'git stash failed' "$SH" || fail "take_over no longer reports a refused stash"
+
+# ---------------------------------------------------------------- F9: --issue naming a closed or unknown id is an error
+# With other issues open (proj_ov2, dry-run only so issue-ov2 is still open) …
+rc=0
+out="$(cd "$proj_ov2" && bash auto-develop.sh --dry-run --issue does-not-exist 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "--issue with an unknown id exited 0: $out"
+echo "$out" | grep -q "does-not-exist is not an open issue" || fail "--issue unknown id not reported: $out"
+# … and when nothing is open at all (proj_ok: its issue is done).
+rc=0
+out="$(cd "$proj_ok" && bash auto-develop.sh --dry-run --issue does-not-exist 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "--issue with an unknown id on an all-done source exited 0: $out"
+echo "$out" | grep -q "does-not-exist is not an open issue" || fail "--issue unknown id (all done) not reported: $out"
+if echo "$out" | grep -q "no open issues"; then fail "--issue unknown id was reported as 'no open issues'"; fi
+
+# ---------------------------------------------------------------- F6: the blocker carries the findings, and history is byte-capped
+proj_bf="$TMP/run-blocker-findings"; mkdir -p "$proj_bf/.pipeline/lib"
+cp "$SH" "$proj_bf/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_bf/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_bf/AGENTS.md"
+printf -- "- [ ] issue-bf: rejected forever\n" > "$proj_bf/tasks.md"
+git_init "$proj_bf"
+stub_bf="$TMP/stub-bf"; mkdir -p "$stub_bf"
+cat > "$stub_bf/pi" <<'EOF'
+#!/usr/bin/env bash
+last=""
+[ -t 0 ] || last="$(cat)"
+case "$last" in
+  "Gather context"*) echo "research notes" ;;
+  "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
+  "You review a diff"*) echo '{"role":"r","verdict":"reject","findings":[{"severity":"high","file":"a.ts","line":1,"title":"REAL-FINDING","rationale":"r","suggestion":"s"}]}' ;;
+  "Merge these reviewer"*) echo '{}' ;;
+  "Decide this attempt"*) echo '{"decision":"reject","reasons":["high finding"]}' ;;
+  *) echo '{}' ;;
+esac
+EOF
+chmod +x "$stub_bf/pi"
+rc=0
+out="$(cd "$proj_bf" && PATH="$stub_bf:$PATH" bash auto-develop.sh 2>&1)" || rc=$?
+[[ $rc -ne 0 ]] || fail "rejected-forever issue was not blocked: $out"
+grep -q "REAL-FINDING" "$proj_bf/MEMORY.md" || fail "the blocker entry does not carry the review finding: $(cat "$proj_bf/MEMORY.md")"
+if grep -q 'line":1' "$proj_bf/MEMORY.md"; then fail "blocker entry carries raw line numbers"; fi
+# Byte cap on the history fed back into prompts.
+proj_bc="$TMP/run-blocker-cap"; mkdir -p "$proj_bc/.pipeline/lib"
+cp "$SH" "$proj_bc/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_bc/.pipeline/lib/"
+cp "$TMP/AGENTS.md" "$proj_bc/AGENTS.md"
+printf -- "- [ ] issue-bc: capped history\n" > "$proj_bc/tasks.md"
+{ echo "## Blocker — issue-bc (2026-01-01)"; echo; i=0; while [ $i -lt 200 ]; do i=$((i+1)); echo "old-blocker-line-$i"; done; echo "NEWEST-BLOCKER-LINE"; } > "$proj_bc/MEMORY.md"
+git_init "$proj_bc"
+out="$(cd "$proj_bc" && BLOCKER_HISTORY_MAX_BYTES=400 bash auto-develop.sh --dry-run 2>&1)" || fail "blocker-cap dry-run failed: $out"
+bc_prompt="$(ls "$proj_bc"/.pipeline/prompts/issue-bc/issue-bc-research-* | head -1)"
+grep -q "older blocker text omitted" "$bc_prompt" || fail "blocker history was not byte-capped"
+grep -q "NEWEST-BLOCKER-LINE" "$bc_prompt" || fail "byte cap dropped the newest blocker text"
+if grep -q "old-blocker-line-1$" "$bc_prompt"; then fail "byte cap kept the oldest blocker text"; fi
+
+# ---------------------------------------------------------------- F8: a null finding is dropped, not a stack trace
+echo '{"role":"x","verdict":"approve","findings":[null,"text",{"severity":"low","file":"f","line":1,"title":"t"}]}' > "$TMP/r-null.json"
+rc=0; node "$LIB/gate.mjs" --check "$TMP/r-null.json" >/dev/null 2>"$TMP/null.err" || rc=$?
+[[ $rc -eq 0 ]] || fail "--check on a null finding element failed (got $rc): $(cat "$TMP/null.err")"
+rc=0; node "$LIB/gate.mjs" "$TMP/r-null.json" > "$TMP/gate-null.json" 2>"$TMP/null.err" || rc=$?
+[[ $rc -eq 0 ]] || fail "gate on a null finding element failed (got $rc): $(cat "$TMP/null.err")"
+if grep -q TypeError "$TMP/null.err"; then fail "gate threw on a null finding"; fi
+grep -q '"reviewers_used": 1' "$TMP/gate-null.json" || fail "reviewer with a null finding element was not counted"
+grep -q '"title": "t"' "$TMP/gate-null.json" || fail "real finding next to a null element was lost"
+
+# ---------------------------------------------------------------- F13: one mapped reviewer names the real problem
+printf '# A\n```yaml\nmodels:\n  review:\n    security: { provider: a, model: r1 }\n```\n' > "$TMP/one-reviewer.md"
+rc=0; node "$LIB/governance.mjs" config "$TMP/one-reviewer.md" >/dev/null 2>"$TMP/one-reviewer.err" || rc=$?
+[[ $rc -eq 2 ]] || fail "one mapped reviewer must be a contract error (got $rc)"
+grep -q "only one models.review" "$TMP/one-reviewer.err" || fail "one mapped reviewer error does not name the panel size: $(cat "$TMP/one-reviewer.err")"
+if grep -q "single provider" "$TMP/one-reviewer.err"; then fail "one mapped reviewer still reported as a provider problem"; fi
 
 echo "smoke OK"

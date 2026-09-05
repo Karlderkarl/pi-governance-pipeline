@@ -2,7 +2,7 @@
 
 Structural blueprint for the generated `auto-develop.sh`. Stack-agnostic: the gates are read from governance, never hardcoded.
 
-> **Scope of the bundled reference** (`assets/auto-develop.sh`): it implements this blueprint except the split branch (it blocks instead) and the commit/PR/governance-update step (a marked stub). Both are deliberate adaptation points. A generator that implements splitting must honor `max_split_depth`, and must pass the **tree root id** (not the sub-issue id) into `block_issue` / `state issue` so a blocked child does not create a new state file with its own budget.
+> **Scope of the bundled reference** (`assets/auto-develop.sh`): it implements this blueprint except the split branch (it blocks instead) and the PR/governance-update step (a marked stub). The commit itself is implemented (`commit_approved`, marked `ADAPT`): the reviewed paths plus the issue source are committed after an approval, or the run stops before the next issue when that is disabled (`COMMIT_APPROVED=0`) or fails. Both gaps are deliberate adaptation points. A generator that implements splitting must honor `max_split_depth`, and must pass the **tree root id** (not the sub-issue id) into `block_issue` / `state issue` so a blocked child does not create a new state file with its own budget.
 
 ## Contents
 
@@ -110,7 +110,11 @@ Verify these when generating or re-syncing. A pipeline that violates one is wron
 9. A resumed run restores per-issue attempt counters from the state file; counters never restart at zero after a crash.
 10. `--dry-run` writes no state and consumes no budget.
 11. An empty working-tree diff is a rejected attempt, not a clean review.
-12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach, and deletes cached `research.md` so the next pass gathers context again. `MEMORY.md` is copied out and written back — stash `-u` would otherwise swallow the blocker history.
-13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `CLAUDE.md`) and the `.pipeline/` and `.pi/` directories. An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.
+12. `reject` keeps the working tree (incremental repair). `take_over` stashes it so `implement_master` starts from the issue, not from the rejected approach, and deletes cached `research.md` so the next pass gathers context again. Before the stash, the governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `AGENTS.override.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `CLAUDE.md`), `.pi/`, the issue source and the script itself are copied out and written back afterwards — stash `-u` would otherwise carry them off. A refused stash is reported, never swallowed.
+13. The review diff excludes governance files (`MEMORY.md`, `SOUL.md`, `AGENTS.md`, `AGENTS.override.md`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `CLAUDE.md`, including the `.MD` spellings), the `.pipeline/` and `.pi/` directories, the issue source and the pipeline script itself. An issue whose only intended change is a governance file cannot complete in this pipeline; that work belongs to `/govern`.
 14. Diff truncation is per file, not a byte prefix of the concatenated patch. Omitted paths are named in a manifest so the reviewer prompt says what was not judged. Untracked files (TDD tests) are considered first.
 15. Two consecutive attempts with `reviewers_used < MIN_REVIEWERS` abort as a configuration error before controller and master of the second attempt.
+16. Approved work is committed (the reviewed paths plus the issue source) before the next issue starts. If the commit is disabled or fails, the run stops and names the issues it did not start — an uncommitted approval would be reviewed as the next issue's diff and stashed by its `take_over`. A fresh issue that starts on a tree already differing from HEAD is warned about.
+17. `review.blocking_severities` and `review.followup_severities` together cover all four severities (contract error otherwise), and the gate blocks on a known severity that appears in neither.
+18. A reviewer's retry replaces the original only if it parses at least as well **and** carries a worst severity at least as high. A cleaner parse that lost a `critical` is discarded.
+19. A real run requires an initial commit; `--dry-run` only notes its absence.

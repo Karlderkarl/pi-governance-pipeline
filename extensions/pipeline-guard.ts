@@ -47,24 +47,55 @@ const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
 	{ pattern: /\bnpm\s+publish\b|\bpi\s+install\b/, reason: "package publish or install" },
 ];
 
-const GOVERNANCE = ["SOUL.md", "AGENTS.md", "APPEND_SYSTEM.md", "SYSTEM.md", "CLAUDE.md", "MEMORY.md"];
+// AGENTS.override.md replaces AGENTS.md in every pi process; AGENTS.MD and
+// CLAUDE.MD are pi's other context-file spellings; .pi/settings.json enables
+// extensions that a child with --approve then executes. All of it is governance.
+const GOVERNANCE = [
+	"SOUL.md",
+	"AGENTS.md",
+	"AGENTS.override.md",
+	"AGENTS.MD",
+	"APPEND_SYSTEM.md",
+	"SYSTEM.md",
+	"CLAUDE.md",
+	"CLAUDE.MD",
+	"MEMORY.md",
+	".pi/settings.json",
+];
 
-function governanceFileIn(text: string): string | undefined {
-	return GOVERNANCE.find((g) => {
-		const esc = g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-		return new RegExp(`(?:^|[^A-Za-z0-9_])${esc}(?:[^A-Za-z0-9_]|$)`).test(text);
-	});
-}
+const GOV_ALT = GOVERNANCE.map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+// One governance path as a shell word: optional quote, optional directory
+// prefix, the name, optional quote. Group 1 is the name.
+const GOV_TOKEN = `["']?(?:[^\\s"'|;&<>]*/)?(${GOV_ALT})["']?`;
+const END = `(?=\\s|$|[;|&)])`;
+// The governance file has to be the *target* of the write. A governance name
+// anywhere near a `>` used to count, which blocked `cat AGENTS.md 2>/dev/null`
+// in every non-interactive child — a read, on the path the roles need most.
+const WRITE_PATTERNS: RegExp[] = [
+	// redirection into the file; `2>/dev/null` and `>&2` have other targets
+	new RegExp(`(?:^|[^0-9])>>?\\s*${GOV_TOKEN}${END}`),
+	new RegExp(`(?:^|[\\s;|&(])tee\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
+	new RegExp(`(?:^|[\\s;|&(])sed\\b[^|;&]*?\\s-[a-zA-Z]*i\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
+	// mv/cp write their last argument; `cp AGENTS.md /tmp/backup` is a read
+	new RegExp(`(?:^|[\\s;|&(])(?:mv|cp)\\s+(?:\\S+\\s+)+${GOV_TOKEN}\\s*(?:$|[;|&)])`),
+	new RegExp(`(?:^|[\\s;|&(])rm\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
+	new RegExp(
+		`(?:^|[\\s;|&(])(?:Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Remove-Item)\\b[^|;&]*?\\s${GOV_TOKEN}${END}`,
+		"i",
+	),
+];
 
 function shellWritesGovernance(command: string): string | undefined {
-	const name = governanceFileIn(command);
-	if (!name) return;
-	const writey =
-		/(^|[\s;|&])(tee|sed\s+-i)\b/.test(command) ||
-		/(^|[\s;|&])(mv|cp|rm)\b/.test(command) ||
-		/(^|[\s;|&])(Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Remove-Item)\b/i.test(command) ||
-		/>>?/.test(command);
-	return writey ? name : undefined;
+	for (const re of WRITE_PATTERNS) {
+		const m = re.exec(command);
+		if (m) return m[1];
+	}
+	return undefined;
+}
+
+function governancePath(path: string): string | undefined {
+	const p = path.replace(/\\/g, "/");
+	return GOVERNANCE.find((g) => p === g || p.endsWith(`/${g}`));
 }
 
 function stateDir(cwd: string): string {
@@ -164,7 +195,7 @@ export default function (pi: ExtensionAPI) {
 		for (const tool of ["write", "edit"] as const) {
 			if (event.toolName !== tool) continue;
 			const path = String((event.input as { path?: string }).path ?? "");
-			const name = GOVERNANCE.find((g) => path.endsWith(g));
+			const name = governancePath(path);
 			if (!name) continue;
 			if (!ctx.hasUI) {
 				if (process.env.PIPELINE_ALLOW_GOVERNANCE_WRITE === "1") return;

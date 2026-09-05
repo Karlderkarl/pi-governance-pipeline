@@ -72,7 +72,7 @@ The gate depends on this being machine-readable. Instruct the reviewer to emit *
 }
 ```
 
-- `verdict`: `approve` | `reject` — advisory only; severity decides the gate. The word does decide whether the reviewer gets its one retry (`--check` requires `approve` or `reject`); after that retry, findings still reach the gate even if the word is wrong
+- `verdict`: `approve` | `reject` — advisory only; severity decides the gate. The word does decide whether the reviewer gets its one retry (`--check` requires `approve` or `reject`); after that retry, findings still reach the gate even if the word is wrong. The retry is a fresh process with no memory of the first pass, so it replaces the original only if it parses at least as well **and** its worst finding is at least as severe — a clean `approve` with no findings never displaces a `critical` that arrived with the wrong verdict word
 - `severity`: `critical` | `high` | `medium` | `low` — anything else (including a trailing space or a synonym like `blocker`) is treated as blocking; the gate does not drop unknown severities
 - `line`: integer or `null` when file-level
 - `findings`: empty array when nothing found

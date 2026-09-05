@@ -35,18 +35,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.16
+pi install npm:pi-governance-pipeline@1.0.17
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.16
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.17
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.16
+pi -e npm:pi-governance-pipeline@1.0.17
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.16
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.17
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -83,6 +83,7 @@ pi
 > /govern docs/PRD.md      # writes governance, asks about anything unresolved
 > /automate                # generates the pipeline, validates the contract
 > !grep -qxF '.pipeline/' .gitignore 2>/dev/null || echo '.pipeline/' >> .gitignore
+> !git add -A && git commit -qm "governance + pipeline"   # a real run needs a HEAD
 > !./auto-develop.sh --dry-run
 ```
 
@@ -144,7 +145,8 @@ on a model that only exposes `off` and `high` therefore runs at `high`.
 Validation runs at generation time, and the reference script also runs it at
 startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach
 the loop. It refuses:
-`implement_master` equal to `implement`, reviewers on a single provider, a tree budget
+`implement_master` equal to `implement`, reviewers on a single provider or only one
+mapped reviewer, severity lists that do not together cover all four severities, a tree budget
 below the attempt sum, a split depth above 1 without a deliberate override, an
 unknown `thinking` value, and `constraints.no_self_review: true` written explicitly
 while fewer than two `review.*` roles are mapped (a `default`/`default` collision
@@ -161,6 +163,10 @@ that in two places, not one:
   starts, and refuses a non-interactive stdin unless `--yes` is passed.
   `--auto-merge` is a stub in the reference script: the flag is parsed and the
   gate asks, but nothing is merged — adapt that step in a generated pipeline.
+  Approved work is committed (the reviewed paths plus the issue source) before
+  the next issue starts, so no issue reviews another's diff and a later
+  `take_over` cannot stash approved work away. `COMMIT_APPROVED=0` disables the
+  commit; the run then stops after the first approval instead.
 - `pipeline-guard` is a speed bump against an agent reaching for a destructive
   command by accident in an interactive session, **not a sandbox**. It pattern-
   matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
@@ -223,6 +229,8 @@ rarely need changing:
 | `ROLE_TIMEOUT_SECONDS` | `0` | Cap around each `pi -p`. GNU `timeout`, else `gtimeout`, else unprotected. `0` disables. Exit 124 empties the outfile |
 | `PROMPT_KEEP_RUNS` | `3` | Distinct run ids kept under `.pipeline/prompts/`; older files are deleted |
 | `BLOCKER_HISTORY_MAX` | `5` | Last N `MEMORY.md` blocker entries fed into research and implement prompts |
+| `BLOCKER_HISTORY_MAX_BYTES` | `16384` | Byte cap on that history; the newest text is kept |
+| `COMMIT_APPROVED` | `1` | Commit the reviewed paths plus the issue source after an approval. `0` leaves the tree untouched and stops the run after the first approval, so the next issue never reviews it as its own diff |
 
 ## Releasing (maintainers)
 

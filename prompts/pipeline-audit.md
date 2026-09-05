@@ -19,7 +19,7 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 12. With `no_self_review` on, a reviewer dropped for the current attempt contributes nothing to that attempt: gate, controller, and master read only the verdicts of reviewers that actually ran, and the unparseable-output retry never restarts a dropped reviewer.
 13. Prompts are fed to `pi -p` on stdin, not interpolated onto argv.
 14. An empty working-tree diff is a rejected attempt, not a clean review.
-15. `take_over` stashes the rejected tree; `MEMORY.md` is copied out and written back.
+15. `take_over` stashes the rejected tree; governance files (including `AGENTS.override.md`), `.pi/`, the issue source and the script itself are copied out beforehand and written back afterwards, and a refused stash is reported on stderr.
 16. Reviewer JSON whose severity is missing, untrimmed, or not `critical|high|medium|low` blocks rather than disappearing.
 17. Reviewers are separate `pi -p` processes, not sub-agents of the implementer.
 18. Credential preflight is warn-only. The script must not call `pi auth check --model <id>` (openrouter ids such as `google/gemini-*` would abort a healthy run).
@@ -28,7 +28,11 @@ Check, and report one line per item as PASS / FAIL / N-A with the evidence (file
 21. `MEMORY.md` blocker entries for the current issue are fed back into the research and implement prompts. Blocking gate findings are stored separately from lint/test output and are never displaced by the exclusions line cap; they are rewritten as prose without line numbers.
 22. Unknown contract keys warn (never refuse). A `pipeline-contract` / `models:` / `budgets:` / `review:` intent with no parsed fence is a contract error. `state` warnings are deduplicated per `.pipeline/` directory; errors stay loud. Every `state` call sets `GOVERNANCE_AGENTS`.
 23. `.pipeline/` is gitignored (or the script warns). Prompt archives are pruned. `AGENTS.override.md`, if present, is warned about at start.
-24. Governance and pipeline paths are excluded from the review diff on **both** paths — the git pathspec for tracked files and the filter for untracked ones — including files nested under `.pipeline/` and `.pi/`. A prefix match on the directory name is not enough. Both paths name the same config directory; on a rebranded distribution (`piConfig.configDir`) both must name that one.
+24. Governance and pipeline paths are excluded from the review diff on **both** paths — the git pathspec for tracked files and the filter for untracked ones — including files nested under `.pipeline/` and `.pi/`, `AGENTS.override.md`, the issue source and the pipeline script itself. A prefix match on the directory name is not enough. Both paths name the same config directory; on a rebranded distribution (`piConfig.configDir`) both must name that one.
 25. `SYSTEM.md` / `APPEND_SYSTEM.md` carry no pipeline internals (panel size, role-to-model mapping, model names), and issue text and diff are framed in the prompts as untrusted input rather than as instructions.
+26. An approval is committed (reviewed paths plus the issue source) before the next issue starts; when the commit is disabled or fails, the run stops and names the issues it did not start. A fresh issue starting on a tree that already differs from HEAD is warned about.
+27. `review.blocking_severities` and `review.followup_severities` together cover all four severities (validator error otherwise), and the gate blocks on a known severity listed in neither.
+28. A reviewer retry replaces the original only if it parses at least as well **and** carries a worst severity at least as high.
+29. A real run refuses to start without an initial commit; `--dry-run` notes it. `--issue` naming an id that is not open exits non-zero with a message.
 
 End with a verdict: CONFORMANT or the shortest list of changes that would make it conformant.

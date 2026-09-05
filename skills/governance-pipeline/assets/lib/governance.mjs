@@ -317,9 +317,11 @@ export function validate(config, source = {}) {
 		errors.push(`AGENTS.md models.implement_master (${master}) equals models.implement; escalation would change nothing`);
 	}
 	const providers = new Set();
+	let mappedReviewerCount = 0;
 	for (const r of REVIEWERS) {
 		const entry = m.review?.[r];
 		if (!entry || typeof entry !== "object" || !entry.model) continue;
+		mappedReviewerCount++;
 		const provider = entry.provider;
 		if (typeof provider !== "string" || provider === "") {
 			// Without a provider the diversity set and no_self_review identity
@@ -331,7 +333,13 @@ export function validate(config, source = {}) {
 		}
 		providers.add(provider);
 	}
-	if (providers.size === 1) {
+	if (mappedReviewerCount === 1) {
+		// One mapped reviewer is one provider by construction; naming the
+		// provider would send the operator after the wrong fix.
+		errors.push(
+			"AGENTS.md maps only one models.review.* role; a review panel needs at least two mapped reviewers on two providers",
+		);
+	} else if (providers.size === 1) {
 		errors.push(`AGENTS.md models.review.* uses a single provider (${[...providers][0]}); reviewers must span at least two`);
 	}
 	const b = config.budgets;
@@ -374,6 +382,24 @@ export function validate(config, source = {}) {
 	};
 	requireSeverityList("review.blocking_severities", config.review.blocking_severities);
 	requireSeverityList("review.followup_severities", config.review.followup_severities);
+	// The two lists must partition the four severities. gate.mjs blocks on an
+	// unlisted known severity, but the operator should learn that here, not
+	// from a blocked run whose gate JSON names a severity nobody configured.
+	if (Array.isArray(config.review.blocking_severities) && Array.isArray(config.review.followup_severities)) {
+		const norm = (list) => list.map((s) => String(s).toLowerCase());
+		const bl = norm(config.review.blocking_severities);
+		const fl = norm(config.review.followup_severities);
+		const missing = [...SEVERITIES].filter((s) => !bl.includes(s) && !fl.includes(s));
+		if (missing.length > 0) {
+			errors.push(
+				`AGENTS.md review.blocking_severities and review.followup_severities together must cover critical, high, medium, low; missing: ${missing.join(", ")} — a finding at an unlisted severity is neither blocking nor a follow-up`,
+			);
+		}
+		const both = bl.filter((s) => fl.includes(s));
+		if (both.length > 0) {
+			warnings.push(`AGENTS.md review lists ${both.join(", ")} as both blocking and follow-up; blocking wins at the gate`);
+		}
+	}
 	eachMappedRole(m, (path, entry) => {
 		const thinking = thinkingRef(entry);
 		if (!thinking) return;

@@ -81,7 +81,7 @@ review:
 
 Any finding at a blocking severity rejects the attempt. Findings at follow-up severities become tickets and do not block. There is no vote count and no percentage — see the reviewer schema in `prompt-builders.md`.
 
-Severity is normalised with trim + lower-case before comparison. A finding whose normalised severity is not `critical`, `high`, `medium`, or `low` is treated as **blocking** (fail-closed) and listed under `unknown_severity` in the gate JSON — reviewers are language models, and a trailing space or a synonym like `blocker` must not clear the gate.
+Severity is normalised with trim + lower-case before comparison. A finding whose normalised severity is not `critical`, `high`, `medium`, or `low` is treated as **blocking** (fail-closed) and listed under `unknown_severity` in the gate JSON — reviewers are language models, and a trailing space or a synonym like `blocker` must not clear the gate. A known severity that appears in neither list also blocks and is listed under `unlisted_severity`; the validator refuses such a pair of lists up front.
 
 Both lists must be flow-style arrays of known severities (`critical`, `high`, `medium`, `low`), e.g. `[critical, high]`. A YAML block sequence (`- critical`) is a contract error: the subset parser would otherwise treat it as an empty map and crash later.
 
@@ -109,7 +109,8 @@ The one thing absence cannot do is buy a guarantee. `no_self_review` written int
 `automate` validates at generation time and fails loudly on:
 
 - `implement_master` identical to `implement` — escalation would be pointless (compared without `thinking`)
-- exactly one provider across mapped `review.*` roles — correlated reviewers. A mapped `review.*` role without `provider:` is also an error (the role is named): diversity and `no_self_review` cannot compare a model that has no provider. Zero mapped reviewers stay a warning, not this error
+- exactly one provider across mapped `review.*` roles — correlated reviewers. Exactly one mapped `review.*` role is its own error ("only one models.review.* role is mapped"): the fix is a second reviewer, not a different provider. A mapped `review.*` role without `provider:` is also an error (the role is named): diversity and `no_self_review` cannot compare a model that has no provider. Zero mapped reviewers stay a warning, not this error
+- `review.blocking_severities` and `review.followup_severities` that do not together cover `critical`, `high`, `medium`, `low` — a finding at an unlisted severity would be neither blocking nor a follow-up. Overlap between the two lists is a warning; blocking wins at the gate
 - `max_runs_per_tree` lower than `max_attempts_controller + max_attempts_master` — no issue could ever finish
 - a budget field that is not an integer in range (`max_attempts_*` and `max_runs_per_tree` ≥ 1, `max_split_depth` ≥ 0)
 - `max_split_depth` above 1 without `PIPELINE_ALLOW_DEEP_SPLIT=1` (an env override, not a PRD field — generators that only read this contract would otherwise have no way to honour it)

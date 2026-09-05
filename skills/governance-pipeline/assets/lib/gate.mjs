@@ -125,6 +125,11 @@ function extractJson(text) {
 	for (const candidate of candidates) {
 		const parsed = tryParseObject(candidate);
 		if (!parsed || isEcho(parsed)) continue;
+		// A finding is an object. `null` or a bare string in the array would
+		// throw in the merge below and end the gate with a stack trace.
+		if (Array.isArray(parsed.findings)) {
+			parsed.findings = parsed.findings.filter((f) => f && typeof f === "object" && !Array.isArray(f));
+		}
 		if (isVerdict(parsed)) verdict = verdict ? stricter(verdict, parsed) : parsed;
 		// Same rule for the fallback tier: a reviewer whose real object carries an
 		// off-schema verdict word ("blocked") lands here, and an appended quote
@@ -137,7 +142,9 @@ function extractJson(text) {
 // --check ranks the file so the pipeline retry cannot overwrite a usable
 // original with worse output. 0 = stage-1 verdict (retry not needed),
 // 2 = findings without a valid word (retry, but keep this if the retry is worse),
-// 1 = nothing the gate can use.
+// 1 = nothing the gate can use. stdout carries the worst severity rank the
+// file holds (-1 none, 0 low .. 3 critical, 4 unknown) so the caller can
+// refuse a retry that parses better but carries less.
 if (checkOnly) {
 	let parsed = null;
 	try {
@@ -145,8 +152,10 @@ if (checkOnly) {
 	} catch {
 		parsed = null;
 	}
+	const usable = parsed && Array.isArray(parsed.findings);
+	process.stdout.write(`${usable ? worstRank(parsed) : -1}\n`);
 	if (isVerdict(parsed)) process.exit(0);
-	process.exit(parsed && Array.isArray(parsed.findings) ? 2 : 1);
+	process.exit(usable ? 2 : 1);
 }
 
 const severityOf = (f) => String(f.severity ?? "").trim().toLowerCase();
@@ -189,11 +198,18 @@ for (const file of files) {
 }
 
 const unknownFindings = findings.filter((f) => !KNOWN_SEVERITY.has(severityOf(f)));
+// A known severity that the config lists nowhere is not "neither": it blocks,
+// like an unknown one. `--blocking critical --followup low` must not let a
+// high pass because nobody wrote it down. The contract validator refuses
+// such lists up front; this is the runtime half of the same rule.
+const unlistedFindings = findings.filter(
+	(f) => KNOWN_SEVERITY.has(severityOf(f)) && !blocking.includes(severityOf(f)) && !followup.includes(severityOf(f)),
+);
 const blockingFindings = findings.filter(
-	(f) => blocking.includes(severityOf(f)) || !KNOWN_SEVERITY.has(severityOf(f)),
+	(f) => blocking.includes(severityOf(f)) || !KNOWN_SEVERITY.has(severityOf(f)) || !followup.includes(severityOf(f)),
 );
 const followupFindings = findings.filter(
-	(f) => KNOWN_SEVERITY.has(severityOf(f)) && followup.includes(severityOf(f)),
+	(f) => KNOWN_SEVERITY.has(severityOf(f)) && followup.includes(severityOf(f)) && !blocking.includes(severityOf(f)),
 );
 
 const result = {
@@ -207,6 +223,13 @@ const result = {
 	blocking: blockingFindings,
 	followups: followupFindings,
 	unknown_severity: unknownFindings.map((f) => ({
+		file: f.file ?? "-",
+		line: f.line ?? "-",
+		title: f.title ?? "",
+		severity: f.severity,
+		role: f.role,
+	})),
+	unlisted_severity: unlistedFindings.map((f) => ({
 		file: f.file ?? "-",
 		line: f.line ?? "-",
 		title: f.title ?? "",

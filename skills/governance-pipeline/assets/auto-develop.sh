@@ -27,6 +27,20 @@ MEMORY_FILE="${MEMORY_FILE:-$ROOT/MEMORY.md}"
 ISSUE_SOURCE="${ISSUE_SOURCE:-$ROOT/tasks.md}"   # file of "- [ ] id: ..." lines, or !command printing "id: ..."
 LINT_CMD="${LINT_CMD:-}"                          # adapt: npm run lint, ruff, ...
 TEST_CMD="${TEST_CMD:-}"                          # adapt: npm test, pytest, ...
+# Approved work is committed (reviewed paths + the issue source) so the next
+# issue reviews only its own diff and a later take_over cannot stash it away.
+# 0 disables the commit; the run then stops after the first approval instead
+# of carrying an uncommitted approval into the next issue. See commit_approved.
+COMMIT_APPROVED="${COMMIT_APPROVED:-1}"
+# Paths of the harness itself, relative to ROOT. Neither is an implementation:
+# both stay out of the review diff and survive the take_over stash.
+SELF_REL="${SELF#"$ROOT"/}"
+ISSUE_REL=""
+if [[ "$ISSUE_SOURCE" != !* ]]; then
+  if [[ "$ISSUE_SOURCE" != /* ]]; then ISSUE_REL="$ISSUE_SOURCE"
+  elif [[ "$ISSUE_SOURCE" == "$ROOT"/* ]]; then ISSUE_REL="${ISSUE_SOURCE#"$ROOT"/}"
+  fi
+fi
 # The diff is prompt input — cap it like every other excerpt, or an unignored
 # build directory flushes into every reviewer prompt on every attempt.
 DIFF_MAX_BYTES="${DIFF_MAX_BYTES:-65536}"
@@ -40,9 +54,13 @@ REVIEWERS_MAX_BYTES="${REVIEWERS_MAX_BYTES:-65536}"
 # are never displaced by this cap.
 EXCLUSIONS_MAX_LINES="${EXCLUSIONS_MAX_LINES:-200}"
 [[ "$EXCLUSIONS_MAX_LINES" =~ ^[0-9]+$ ]] || EXCLUSIONS_MAX_LINES=200
-# Blocker entries from MEMORY.md re-enter research/implement prompts.
+# Blocker entries from MEMORY.md re-enter research/implement prompts. The
+# count caps how many entries, the byte cap what they may add up to — an entry
+# is written by block_issue and can carry a tool log.
 BLOCKER_HISTORY_MAX="${BLOCKER_HISTORY_MAX:-5}"
 [[ "$BLOCKER_HISTORY_MAX" =~ ^[0-9]+$ ]] || BLOCKER_HISTORY_MAX=5
+BLOCKER_HISTORY_MAX_BYTES="${BLOCKER_HISTORY_MAX_BYTES:-16384}"
+[[ "$BLOCKER_HISTORY_MAX_BYTES" =~ ^[0-9]+$ ]] || BLOCKER_HISTORY_MAX_BYTES=16384
 # Prompt archive under .pipeline/prompts: keep this many distinct run ids.
 PROMPT_KEEP_RUNS="${PROMPT_KEEP_RUNS:-3}"
 [[ "$PROMPT_KEEP_RUNS" =~ ^[1-9][0-9]*$ ]] || PROMPT_KEEP_RUNS=3
@@ -58,6 +76,9 @@ MIN_REVIEWERS="${MIN_REVIEWERS:-2}"
 UNATTENDED=0; AUTO_MERGE=0; DRY_RUN=0; ASSUME_YES=0; ONLY_ISSUE=""; MAX_RUNS=""
 FAILED_ISSUES=()
 GLOBAL_RUNS=0
+# Set when an approval could not be committed: the remaining issues are not
+# started, because they would review that approval as their own diff.
+HALT_REASON=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -117,6 +138,16 @@ fi
 # would burn the whole tree budget and then block a correct implementation.
 git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 \
   || die "auto-develop.sh requires a git repository"
+# take_over stashes against HEAD and the approve step commits on top of it.
+# `git stash` refuses without an initial commit, silently leaving the rejected
+# tree in place for implement_master — so refuse up front instead.
+if ! git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
+  if (( DRY_RUN )); then
+    echo "note: the repository has no commit yet — a real run refuses to start until there is one (take_over needs a HEAD to stash against)" >&2
+  else
+    die "the repository has no commit yet; create one first (git commit --allow-empty -m init is enough) — take_over needs a HEAD to stash against"
+  fi
+fi
 
 # pi loads the first hit of AGENTS.override.md, AGENTS.md, … from cwd and
 # ancestors. The harness still routes from AGENTS_FILE. If both exist, every
@@ -268,9 +299,17 @@ blocker_history() { # <issue_id>
     const hits = chunks.filter((c) => c === prefix || c.startsWith(prefix + " ") || c.startsWith(prefix + "(") || c.startsWith(prefix + "\n"));
     const last = hits.slice(-max);
     if (last.length === 0) process.exit(0);
+    let body = last.map((c) => "## " + c.trimEnd()).join("\n\n") + "\n";
+    // Newest last, so a byte cap drops the oldest text first. Without it a
+    // blocker that carried a tool log would re-enter every later prompt whole.
+    const maxBytes = Number(process.argv[4]) || 16384;
+    if (Buffer.byteLength(body) > maxBytes) {
+      const buf = Buffer.from(body);
+      body = `[older blocker text omitted — newest ${maxBytes} bytes kept]\n` + buf.subarray(buf.length - maxBytes).toString();
+    }
     process.stdout.write("Prior blockers for this issue (newest last):\n\n");
-    process.stdout.write(last.map((c) => "## " + c.trimEnd()).join("\n\n") + "\n");
-  ' "$MEMORY_FILE" "$1" "$BLOCKER_HISTORY_MAX"
+    process.stdout.write(body);
+  ' "$MEMORY_FILE" "$1" "$BLOCKER_HISTORY_MAX" "$BLOCKER_HISTORY_MAX_BYTES"
 }
 
 # gate.json findings as prose: file + title/rationale, never line numbers.
@@ -390,7 +429,12 @@ capture_diff() { # <outfile>
   # A rebranded distribution that sets piConfig.configDir must change this regex
   # AND the pathspec list below in step; missing one leaks that distribution's
   # SYSTEM.md into every reviewer prompt, silently. Adaptation point, not a knob.
-  local is_gov='^(\.pipeline|\.pi)(/|$)|^(MEMORY|SOUL|AGENTS|SYSTEM|APPEND_SYSTEM|CLAUDE)\.md$'
+  # AGENTS.override.md replaces AGENTS.md in every child pi; AGENTS.MD and
+  # CLAUDE.MD are pi's other context-file spellings. All of them are governance.
+  local is_gov='^(\.pipeline|\.pi)(/|$)|^(MEMORY|SOUL|AGENTS|SYSTEM|APPEND_SYSTEM|CLAUDE)\.(md|MD)$|^AGENTS\.override\.md$'
+  # The harness itself is never the implementation: the script and the issue
+  # source stay out of the diff too (exact match, no regex escaping needed).
+  is_harness() { [[ "$1" == "$SELF_REL" || ( -n "$ISSUE_REL" && "$1" == "$ISSUE_REL" ) ]]; }
   # Untracked first: TDD writes new test files, and a byte-prefix of `git diff`
   # then the untracked append used to drop them first.
   # -z, and NUL records in $list. Without it git C-quotes every path that holds
@@ -403,6 +447,7 @@ capture_diff() { # <outfile>
   while IFS= read -r -d '' f; do
     [[ -z "$f" ]] && continue
     printf '%s\n' "$f" | grep -Eq "$is_gov" && continue
+    is_harness "$f" && continue
     if [[ -s "$ROOT/$f" ]] && ! grep -qI . "$ROOT/$f" 2>/dev/null; then
       printf '%s\t%s\0' "$f" "binary" >> "$list"
       continue
@@ -413,13 +458,18 @@ capture_diff() { # <outfile>
   if git -C "$ROOT" rev-parse --verify HEAD >/dev/null 2>&1; then
     name_cmd=(git -C "$ROOT" diff HEAD --name-only -z -- .)
   fi
+  local -a harness_excl=(":(exclude,literal)$SELF_REL")
+  [[ -n "$ISSUE_REL" ]] && harness_excl+=(":(exclude,literal)$ISSUE_REL")
   while IFS= read -r -d '' f; do
     [[ -z "$f" ]] && continue
     printf '%s\n' "$f" | grep -Eq "$is_gov" && continue
+    is_harness "$f" && continue
     printf '%s\t%s\0' "$f" "tracked" >> "$list"
   done < <("${name_cmd[@]}" \
       ':(exclude).pipeline' ':(exclude).pi' ':(exclude)MEMORY.md' ':(exclude)SOUL.md' \
       ':(exclude)AGENTS.md' ':(exclude)SYSTEM.md' ':(exclude)APPEND_SYSTEM.md' ':(exclude)CLAUDE.md' \
+      ':(exclude)AGENTS.override.md' ':(exclude)AGENTS.MD' ':(exclude)CLAUDE.MD' \
+      "${harness_excl[@]}" \
       2>/dev/null || true)
   node -e '
     const fs = require("node:fs");
@@ -443,6 +493,10 @@ capture_diff() { # <outfile>
       seen.add(row.path);
       unique.push(row);
     }
+    // Every reviewed path, NUL-terminated (not just separated: `read -d ''`
+    // drops an unterminated last record): the approve step commits exactly
+    // this set, so what was reviewed is what lands in the commit.
+    fs.writeFileSync(out + ".paths", unique.map((r) => r.path + "\0").join(""));
     const load = (row) => {
       if (row.kind === "binary") {
         return Buffer.from(`\n--- new file (untracked, binary — omitted): ${row.path} ---\n`);
@@ -567,8 +621,31 @@ block_issue() { # <root_id> <issue_id> <reason> — never silent: MEMORY.md, sta
 # MEMORY.md was copied out rather than excluded in the first place.
 preserve_paths() {
   printf '%s\n' "$MEMORY_FILE" "$SOUL_FILE" "$AGENTS_FILE" "$SELF" \
-    "$ROOT/SYSTEM.md" "$ROOT/APPEND_SYSTEM.md" "$ROOT/CLAUDE.md" "$ROOT/.pi"
+    "$ROOT/SYSTEM.md" "$ROOT/APPEND_SYSTEM.md" "$ROOT/CLAUDE.md" "$ROOT/.pi" \
+    "$ROOT/AGENTS.override.md" "$ROOT/AGENTS.MD" "$ROOT/CLAUDE.MD"
   [[ "$ISSUE_SOURCE" == !* ]] || printf '%s\n' "$ISSUE_SOURCE"
+}
+
+# ADAPT: the commit / PR / governance-update step. The reference commits the
+# reviewed paths plus the issue source, so the next issue reviews only its own
+# diff and a later take_over cannot stash approved work away. PR creation and
+# --auto-merge stay stubs. Returns non-zero when nothing was committed.
+commit_approved() { # <issue_id> <issue_line> <pathsfile>
+  local id="$1" line="$2" paths="$3" p
+  local -a add=() ident=()
+  if [[ -f "$paths" ]]; then
+    # `|| [[ -n "$p" ]]` keeps a final record that lacks its NUL terminator.
+    while IFS= read -r -d '' p || [[ -n "$p" ]]; do [[ -n "$p" ]] && add+=("$p"); done < "$paths"
+  fi
+  [[ -n "$ISSUE_REL" && -e "$ROOT/$ISSUE_REL" ]] && add+=("$ISSUE_REL")
+  [[ ${add[0]+_} ]] || return 1
+  if [[ -z "$(git -C "$ROOT" config user.email 2>/dev/null)" ]]; then
+    ident=(-c user.name=auto-develop -c user.email=auto-develop@localhost)
+    echo "note: no git identity configured; committing as auto-develop <auto-develop@localhost>" >&2
+  fi
+  git -C "$ROOT" "${ident[@]+"${ident[@]}"}" add -- "${add[@]}" || return 1
+  git -C "$ROOT" "${ident[@]+"${ident[@]}"}" commit -q -m "pipeline: $line" || return 1
+  echo "committed $(git -C "$ROOT" rev-parse --short HEAD): $id" >&2
 }
 
 # ----------------------------------------------------------------------- loop
@@ -607,6 +684,15 @@ process_issue() {
 
   touch "$work/exclusions.md"   # resume keeps tool output of earlier attempts
   touch "$work/findings.md"     # gate findings: never displaced by the line cap
+  # A fresh issue should start from a clean tree. Whatever already differs
+  # from HEAD lands in this issue's review diff and is judged as its work.
+  if (( ! DRY_RUN )) && (( ctrl_attempts + master_attempts == 0 )); then
+    capture_diff "$work/preexisting.patch"
+    if [[ -s "$work/preexisting.patch" ]]; then
+      echo "warning: the working tree already differs from HEAD before the first attempt of $issue_id; those changes will be reviewed as this issue's work — commit or stash them first: $(tr '\0' ' ' < "$work/preexisting.patch.paths")" >&2
+    fi
+    rm -f "$work/preexisting.patch" "$work/preexisting.patch.paths"
+  fi
   # stderr once per issue: the run log records every attempt, the operator
   # does not need the same warning on every retry.
   local independence_warned=0 panel_short_streak=0
@@ -653,8 +739,16 @@ $research_history}" "$work/research.md" || true
     if (( ctrl_attempts >= MAX_CTRL )); then
       role="implement_master"; left=$(( MAX_MASTER - master_attempts ))
       if (( master_attempts >= MAX_MASTER )); then
-        block_issue "$root" "$issue_id" "Rejected at master review $master_attempts times. Unresolved findings:
-$(cat "$work/exclusions.md")"
+        # The blocker is what the next attempt must not repeat: the review
+        # findings (prose, no line numbers) and only the tail of the tool log —
+        # not the whole log, which re-enters every later prompt via MEMORY.md.
+        block_issue "$root" "$issue_id" "Rejected at master review $master_attempts times.
+
+Unresolved review findings:
+$(cat "$work/findings.md")
+
+Last tool output and master notes:
+$(tail -n 40 "$work/exclusions.md")"
         FAILED_ISSUES+=("$issue_id")
         return 0
       fi
@@ -794,12 +888,17 @@ $(cat "$work/exclusions.md")"
     # below which it blocks instead of approving. Only this attempt's
     # reviewers (ran) are eligible — the retry must never resurrect a dropped
     # reviewer to review its own implementation.
-    local i rfile rc nrc
+    # --check prints the worst severity rank the file carries (-1 none, 0..3,
+    # 4 unknown) on stdout. The retry is a fresh process with no memory of the
+    # first pass; a cleaner parse that carries less severe findings is not a
+    # better review, it is a lost finding — strictest wins here as everywhere.
+    local i rfile rc nrc worst nworst
     for (( i = 0; i < ran_n; i++ )); do
       focus="${ran_focus[$i]}"; rfile="${ran[$i]}"
       [[ -f "$rfile" ]] || continue
-      rc=0
-      node "$LIB/gate.mjs" --check "$rfile" >/dev/null 2>&1 || rc=$?
+      rc=0; worst=-1
+      worst="$(node "$LIB/gate.mjs" --check "$rfile" 2>/dev/null)" || rc=$?
+      [[ "$worst" =~ ^-?[0-9]+$ ]] || worst=-1
       if (( rc == 0 )); then continue; fi
       echo "reviewer $focus did not return a usable verdict; one retry with an explicit reminder" >&2
       run_role "$root" "$issue_id" "review.$focus" \
@@ -807,14 +906,18 @@ $(cat "$work/exclusions.md")"
 
 REMINDER: your previous output was not parseable. Emit ONLY the JSON object — no prose, no code fence." \
         "$rfile.retry" "$att-retry" || true
-      nrc=1
-      [[ -f "$rfile.retry" ]] && { nrc=0; node "$LIB/gate.mjs" --check "$rfile.retry" >/dev/null 2>&1 || nrc=$?; }
-      if (( $(rank_of "$nrc") > $(rank_of "$rc") )); then
-        echo "reviewer $focus retry taken (check $rc -> $nrc)" >&2
+      nrc=1; nworst=-1
+      if [[ -f "$rfile.retry" ]]; then
+        nrc=0
+        nworst="$(node "$LIB/gate.mjs" --check "$rfile.retry" 2>/dev/null)" || nrc=$?
+        [[ "$nworst" =~ ^-?[0-9]+$ ]] || nworst=-1
+      fi
+      if (( $(rank_of "$nrc") > $(rank_of "$rc") )) && (( nworst >= worst )); then
+        echo "reviewer $focus retry taken (check $rc -> $nrc, worst severity rank $worst -> $nworst)" >&2
         mv -f "$rfile.retry" "$rfile"
         rm -f "$rfile.retry"
       else
-        echo "reviewer $focus retry discarded (check $rc -> $nrc); keeping the original" >&2
+        echo "reviewer $focus retry discarded (check $rc -> $nrc, worst severity rank $worst -> $nworst); keeping the original" >&2
         rm -f "$rfile.retry"
       fi
     done
@@ -939,6 +1042,15 @@ Emit ONLY this JSON, no prose and no code fence:
       GOVERNANCE_AGENTS="$AGENTS_FILE" node "$LIB/governance.mjs" state issue "$PIPELINE_DIR" "$root" "$issue_id" done >/dev/null || true
       echo "approved: $issue_id"
       mark_issue_done "$issue_raw"
+      # ADAPT: commit / PR / governance update — see commit_approved. An
+      # approval left uncommitted would be reviewed again as the next issue's
+      # diff and stashed by its take_over, so the run stops here instead.
+      if (( COMMIT_APPROVED )); then
+        commit_approved "$issue_id" "$issue_line" "$work/diff.patch.paths" \
+          || HALT_REASON="approved work of $issue_id could not be committed (see git output above)"
+      else
+        HALT_REASON="COMMIT_APPROVED=0: approved work of $issue_id is left uncommitted"
+      fi
       (( AUTO_MERGE )) && echo "auto-merge: not implemented in the reference script — adapt this step" >&2
       return 0
     fi
@@ -974,9 +1086,13 @@ Emit ONLY this JSON, no prose and no code fence:
           n=$((n + 1)); kept+=("$p")
           cp -R "$p" "$bak/$n"
         done < <(preserve_paths)
-        git -C "$ROOT" stash push -u -m "$stash_msg" >/dev/null 2>&1 \
-          && echo "stashed working tree as $stash_msg" >&2 \
-          || true
+        # A refused stash is not silence: implement_master would otherwise
+        # inherit exactly the tree the master just rejected.
+        if git -C "$ROOT" stash push -u -m "$stash_msg" >"$work/stash.log" 2>&1; then
+          echo "stashed working tree as $stash_msg" >&2
+        else
+          echo "warning: git stash failed ($(head -1 "$work/stash.log")); implement_master starts from the rejected tree" >&2
+        fi
         n=0
         for p in ${kept[@]+"${kept[@]}"}; do
           n=$((n + 1))
@@ -1046,11 +1162,24 @@ main() {
   local issues rc=0
   issues="$(next_issues)" || rc=$?
   (( rc == 0 )) || exit "$rc"
-  [[ -n "$issues" ]] || { echo "no open issues in $ISSUE_SOURCE"; return 0; }
-  local line
+  if [[ -z "$issues" ]]; then
+    # --issue naming something that is not open is a mistake, not a quiet no-op.
+    if [[ -n "$ONLY_ISSUE" ]]; then
+      echo "error: --issue $ONLY_ISSUE is not an open issue in $ISSUE_SOURCE" >&2
+      return 1
+    fi
+    echo "no open issues in $ISSUE_SOURCE"; return 0
+  fi
+  local line matched=0
+  local -a not_started=()
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     [[ -n "$ONLY_ISSUE" && "${line%%:*}" != "$ONLY_ISSUE" ]] && continue
+    matched=$((matched + 1))
+    if [[ -n "$HALT_REASON" ]]; then
+      not_started+=("${line%%:*}")
+      continue
+    fi
     if [[ -n "$MAX_RUNS" ]] && (( GLOBAL_RUNS >= MAX_RUNS )); then
       echo "global --max-runs $MAX_RUNS reached" >&2
       break
@@ -1058,13 +1187,27 @@ main() {
     echo "=== ${line%%:*} ==="
     process_issue "$line"
   done <<< "$issues"
+  # --issue naming something that is not open is a mistake, not a quiet no-op.
+  if [[ -n "$ONLY_ISSUE" ]] && (( matched == 0 )); then
+    echo "error: --issue $ONLY_ISSUE is not an open issue in $ISSUE_SOURCE" >&2
+    return 1
+  fi
+  local rc=0
+  if [[ -n "$HALT_REASON" ]]; then
+    echo "stopped: $HALT_REASON. Commit it (or adapt commit_approved) before the next issue reviews it as its own diff." >&2
+    if [[ ${not_started[0]+_} ]]; then
+      echo "not started: ${not_started[*]}" >&2
+      rc=1
+    fi
+  fi
   # A blocked or aborted issue is not "approved": the run exits non-zero.
   # Element-0 test instead of ${#arr[@]}: on bash < 4.4 (macOS ships 3.2) the
   # length expansion of an empty array trips set -u — same class pids guards.
   if [[ ${FAILED_ISSUES[0]+_} ]]; then
     echo "blocked: ${FAILED_ISSUES[*]}" >&2
-    return 1
+    rc=1
   fi
+  return $rc
 }
 
 main
