@@ -45,9 +45,12 @@ jobs:
       # must not be whatever the registry served that minute either.
       - run: npm install -g npm@11
 
-      # The value of this package is the correctness of its assets — never
-      # publish a tarball whose script or libraries fail the smoke test.
-      - name: Smoke test pipeline assets
+      # The value of this package is the correctness of its engine — never
+      # publish a tarball whose engine fails either suite.
+      - name: Unit tests
+        run: node --test tests/
+
+      - name: Parity suite
         run: bash tests/smoke.sh
 
       - name: Tag must match package.json version

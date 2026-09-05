@@ -1,4 +1,4 @@
-# Runs the asset suite on every change to main and on every PR.
+# Runs both suites on every change to main and on every PR.
 # Release publishing stays in release.yml — this workflow must not
 # publish, mint an OIDC token, or write to the repo.
 name: ci
@@ -10,8 +10,18 @@ on:
   pull_request:
 
 jobs:
-  smoke:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 18
+          - os: ubuntu-latest
+            node: 22
+          - os: windows-latest
+            node: 22
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
     steps:
@@ -19,14 +29,20 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
 
-      # 1000+ lines of bash covered only by an end-to-end suite. shellcheck
-      # catches the class smoke.sh cannot: quoting and expansion bugs on a
-      # branch the fixtures never take. Both files are clean at -S warning;
-      # the two genuine false positives carry inline disable comments.
-      - name: Shellcheck the shipped script and the suite
-        run: shellcheck -S warning skills/governance-pipeline/assets/auto-develop.sh tests/smoke.sh
+      # The wrapper and the parity suite are the only shell left. shellcheck
+      # catches the class the suite cannot: quoting and expansion bugs on a
+      # branch the fixtures never take.
+      - name: Shellcheck the wrapper and the suite
+        if: runner.os == 'Linux'
+        run: shellcheck -S warning tests/fixtures/auto-develop.sh tests/smoke.sh
 
-      - name: Smoke test pipeline assets
+      - name: Unit tests
+        run: node --test tests/
+
+      # The parity suite: every 1.0.x scenario plus the 1.2.0 additions,
+      # against a stub pi and a stub claude. Needs bash (Git Bash on Windows).
+      - name: Parity suite
+        shell: bash
         run: bash tests/smoke.sh

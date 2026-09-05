@@ -1,14 +1,15 @@
 # pi-governance-pipeline
 
-A pi package that turns a PRD into project governance, and that governance into an
-issue-driven auto-develop pipeline: one deliberately chosen model per step,
+A pi package that turns a PRD into project governance, and runs an issue-driven
+auto-develop pipeline from that governance: one deliberately chosen model per step,
 independent multi-model review, severity-based gating, and a hard run budget.
+The pipeline ships in the package. The skill configures it; nothing is copied.
 
 ```
 PRD ──▶ govern ──▶ SOUL.md · AGENTS.md · SYSTEM.md · MEMORY.md
                               │
                               ▼
-                        automate ──▶ auto-develop.sh
+                      automate ──▶ pipeline init ──▶ auto-develop.sh ──▶ pipeline run
 ```
 
 ## Why
@@ -17,9 +18,10 @@ A single model implementing and reviewing its own code shares its own blind spot
 runs research and final approval on the same expensive model, and retries a hard
 ticket without a ceiling. This package separates the three concerns:
 
-- **Routing** — every step is its own `pi -p` process, and the script picks the model
+- **Routing** — every step is its own harness process, and the engine picks the model
   from the mapping in `AGENTS.md`. Changing the mapping changes the routing; the
-  script is never touched.
+  engine is never touched. The harness (pi, or Claude Code for Anthropic roles) is
+  chosen per provider, never by governance.
 - **Review** — three reviewers in three processes, spanning at least two providers,
   none of them seeing another's verdict. A model that implemented a diff never
   reviews it. Gating is by severity, not by vote count — and if self-review drops
@@ -29,98 +31,124 @@ ticket without a ceiling. This package separates the three concerns:
   a model context. Attempts are a quality signal per issue; the tree budget is a
   resource limit that never resets. One attempt is six model invocations
   (implement, three reviewers, controller, master; research is cached per issue),
-  so the default `max_runs_per_tree: 25` is a ceiling of ~150 calls, not a
-  spending cap.
+  so 25 ordinary attempts already mean ~150 calls, plus research and reviewer
+  retries. `max_runs_per_tree` caps implementation attempts, not spending.
 
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.0.17
+pi install npm:pi-governance-pipeline@1.2.0
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.0.17
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.0
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.0.17
+pi -e npm:pi-governance-pipeline@1.2.0
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.0.17
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.0
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
-Drop the `@version` if you would rather track the latest release.
-
 Install **user-scoped** (the default). A project-local install (`-l`) loads `pipeline-guard` in
-the pipeline's child `pi -p` processes only after a saved trust decision (`/trust`) or `--approve`.
-Without either, `defaultProjectTrust` (default `ask`) ignores project extensions in non-interactive
-modes, and nothing in the output says the guard is absent. The reference script passes `--approve`
-to those children **only after** the startup safety gate (`--unattended` / `--auto-merge`). That
-flag trusts *all* project-local resources (`.pi/settings.json`, extensions, skills, prompts,
-`SYSTEM.md` / `APPEND_SYSTEM.md`), not only the guard. A plain `./auto-develop.sh` does not pass it.
+implementer `pi -p` processes only after a saved trust decision (`/trust`) or `--approve`.
+Research, reviewers and judges explicitly disable extensions and project trust;
+see `skills/governance-pipeline/references/operations.md`, "Trust and project resources".
 
-The contract in `AGENTS.md` carries its own version (`contract v1`), independent of the package
-version. A package release that changes what a contract field means bumps both.
+The project itself keeps a small wrapper, `auto-develop.sh`, that runs
+`npx pi-governance-pipeline@<pin> run`. The pin is the package version `init` wrote;
+`init --force` moves it, `init --local` points it at a checkout instead of npm.
+The engine supports Node >=18; Pi has its own runtime requirement (Node >=22.19
+for the tested Pi 0.85.1). Bash and git are required; use Git Bash on Windows.
 
 ## Use
 
 | Command | Effect |
 |---|---|
-| `/govern [path-to-PRD]` | Generate or audit `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `MEMORY.md` (and copy `SYSTEM.md` to `.pi/APPEND_SYSTEM.md`) |
-| `/automate` | Generate or re-sync `auto-develop.sh` from that governance |
-| `/pipeline-audit` | Check an existing pipeline against the contract and the invariants |
-| `/pipeline-status` | Show counters, tree budget, and per-issue state |
+| `/govern [path-to-PRD]` | Generate or audit `SOUL.md`, `AGENTS.md`, `SYSTEM.md`, `MEMORY.md` (and `.pi/APPEND_SYSTEM.md`; `CLAUDE.md` when Claude Code runs a role) |
+| `/automate [--harness <spec>] [--local] [--force]` | Validate first, then set up wrapper, `.gitignore` and issue file; dry-run the pipeline |
+| `/pipeline-audit` | `pipeline doctor` and `status`, explained against the invariants |
+| `/pipeline-status` | Counters, tree budget, per-issue state (extension command) |
 | `/skill:governance-pipeline` | Load the skill directly |
 
-The agent also loads the skill on its own when you mention a PRD, governance files,
-`AGENTS.md`, multi-model review, or an auto-develop pipeline.
+The skill can also be selected when you ask to generate or audit governance from a PRD,
+or to set up, run or audit the pipeline. A repository containing `AGENTS.md` alone is
+not a reason to load it.
 
 Typical first run:
 
 ```bash
 pi
 > /govern docs/PRD.md      # writes governance, asks about anything unresolved
-> /automate                # generates the pipeline, validates the contract
-> !grep -qxF '.pipeline/' .gitignore 2>/dev/null || echo '.pipeline/' >> .gitignore
+> /automate                # init + dry-run: routing and prompts, no model calls
 > !git add -A && git commit -qm "governance + pipeline"   # a real run needs a HEAD
-> !./auto-develop.sh --dry-run
+> !./auto-develop.sh --issue issue-1
 ```
+
+Options can be combined: `/automate --harness anthropic=claude-code --local` forwards
+both options and the harness value to `init`. Use `--force` to replace an existing
+wrapper. Missing `--harness` values are errors. `init` validates the options and
+contract before changing setup files, and creates parent directories for an issue
+source such as `backlog/tasks.md`.
+
+The engine's own commands (`node <package>/bin/pipeline.mjs …`):
+
+| Command | Effect |
+|---|---|
+| `run [--dry-run] [--issue id] [--unattended] [--yes] [--max-runs n] [--harness spec]` | The loop |
+| `init [--harness spec] [--local] [--force]` | Validate options and contract; create wrapper, `.gitignore` entry and issue file with parent directories |
+| `doctor` | PASS / WARN / FAIL per project check |
+| `status [--json]` | Counters, tree budget, per-issue state |
 
 ## What is in the package
 
 ```
+bin/pipeline.mjs               the CLI: run · init · doctor · status
+lib/
+  contract/                    YAML subset parser, contract v2 reader and validator
+  state/                       counters and budget (the state file)
+  issues/                      tasks.md and command sources, with split children
+  harness/                     pi and Claude Code adapters, chosen per provider
+  review/                      reviewer-output recovery, severity gate, master decision, findings prose
+  diff/                        per-file review diff with manifest
+  prompts/                     one template per role, assembled per attempt
+  loop/                        the loop, commit, stash, blocker
+  log/                         JSONL events, prompt pruning
+  integrity/                   the one governance path list, snapshot check
+  guard/                       the interactive guard's patterns
+  governance.mjs, gate.mjs     1.0.x-compatible command-line facades
+extensions/pipeline-guard.ts   interactive guard, /pipeline-status, pipeline_state tool
 skills/governance-pipeline/
-  SKILL.md                     two modes: govern and automate
-  references/contract.md       versioned interface between the modes
+  SKILL.md                     three modes: govern, automate, audit
+  references/contract.md       contract v2
   references/governance-files.md
-  references/pipeline-template.md
-  references/prompt-builders.md  per-role prompts and the reviewer JSON schema
-  assets/auto-develop.sh       reference pipeline (ISSUE_SOURCE, LINT_CMD, TEST_CMD)
-  assets/lib/governance.mjs    contract parser, validator, state store
-  assets/lib/gate.mjs          severity gate over reviewer JSON
-extensions/pipeline-guard.ts   privileged-command gate, pipeline_state tool
+  references/operations.md     flags, variables, layout, threat model
+  references/invariants.md     INV-01 … INV-29, each with the test that pins it
+  references/prompt-builders.md
 prompts/                       /govern, /automate, /pipeline-audit
-docs/PRD-harness.md            (repository only, not packed) — the PRD this package was generated from
+docs/PRD-harness.md            (repository only, not packed) — the PRD this package answers
 ```
 
 ## The contract
 
-`AGENTS.md` carries one fenced YAML block. Every field is optional; absence is a
-documented state, and governance without any of these blocks runs every role on the
-default model.
+`AGENTS.md` carries one fenced YAML block. Contract v2 puts everything the loop needs into
+governance; a v1 file (no `contract_version`) keeps every v1 default and its environment
+adaptation points. Full reference: `skills/governance-pipeline/references/contract.md`.
 
-```yaml
+```yaml pipeline-contract
+contract_version: 2
 models:
-  research:          { provider: openai,    model: gpt-5-mini, thinking: low }
-  implement:         { provider: anthropic, model: sonnet-4.5, thinking: high }
+  research:          { provider: openai,    model: gpt-5-mini,   thinking: low }
+  implement:         { provider: anthropic, model: sonnet-4.5,   thinking: high }
   implement_master:  { provider: google,    model: gemini-3-pro, thinking: high }
   controller:        { provider: openai,    model: gpt-5-nano }
-  master_review:     { provider: anthropic, model: opus-4.5, thinking: high }
+  master_review:     { provider: anthropic, model: opus-4.5,     thinking: high }
   review:
     security:        { provider: google,    model: gemini-3-flash, thinking: medium }
     quality:         { provider: openai,    model: gpt-5 }
-    correctness:     { provider: anthropic, model: haiku-4.5, thinking: low }
+    correctness:     { provider: anthropic, model: haiku-4.5,   thinking: low }
   constraints:
     no_self_review: true
 budgets:
@@ -131,121 +159,117 @@ budgets:
 review:
   blocking_severities: [critical, high]
   followup_severities: [medium, low]
+issues:
+  source: tasks.md
+gates:
+  - { name: lint, run: "npm run lint" }
+  - { name: test, run: "npm test" }
 ```
 
-`thinking` is optional per role (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`,
-`max`) and launches as pi's `--model provider/id:thinking` shorthand. The same model
-may appear on two roles with different thinking; identity for `no_self_review` and
-for `implement` vs `implement_master` still ignores the level. The level is checked
-for spelling, not for support: pi clamps a level a model does not expose to the
-next higher supported level (falling back downward only when none exists above),
-silently, and omitting it leaves the choice to pi's own settings. `thinking: low`
-on a model that only exposes `off` and `high` therefore runs at `high`.
-
-Validation runs at generation time, and the reference script also runs it at
-startup (`governance.mjs config`, exit 2), so an invalid contract cannot reach
-the loop. It refuses:
-`implement_master` equal to `implement`, reviewers on a single provider or only one
-mapped reviewer, severity lists that do not together cover all four severities, a tree budget
-below the attempt sum, a split depth above 1 without a deliberate override, an
-unknown `thinking` value, and `constraints.no_self_review: true` written explicitly
-while fewer than two `review.*` roles are mapped (a `default`/`default` collision
-cannot be proven, so the panel would be one model reviewing itself). The defaulted
-`true` path — no `models:` block — still runs, and warns that `no_self_review` cannot
-fire. See `references/contract.md`.
+Validation runs in `init`, `doctor` and at the start of every run. Invalid contracts
+exit 2 from `run`, or 1 from `init` and `doctor`. Validation refuses
+an implementer that escalates to itself, reviewers on a single provider, severity lists
+that do not cover all four severities, a tree budget below the attempt sum, a v2 contract
+without `issues.source` or `gates`, and any field that still carries a decision marker
+(`[USER DECISION REQUIRED]`) — that is how govern hands an open decision to a human
+instead of running on a placeholder.
 
 ## Safety
 
-pi has no permission dialog, and `pi -p` has no UI to ask with. The package handles
-that in two places, not one:
+**Only reviewed work is committed.** Approval commits the reviewed paths and the
+issue source. Unrelated staged entries remain staged. Renames include both the old
+and new paths, and filenames are handled literally. If an implementer moves HEAD,
+the issue is blocked and the whole run stops before gates or review, even if some
+edits remain uncommitted. The log records `head-moved`; commits and remaining edits
+are preserved for inspection. Restore a reviewed baseline before starting another run.
+If an approval commit fails, the run exits non-zero even on the last issue or
+when closing a split parent. Approved work and checkbox changes remain available
+for a manual commit; no further issue starts. A halt after a child leaves its
+split parent open until the baseline is restored.
 
-- The generated script confirms `--unattended` and `--auto-merge` **before** the loop
-  starts, and refuses a non-interactive stdin unless `--yes` is passed.
-  `--auto-merge` is a stub in the reference script: the flag is parsed and the
-  gate asks, but nothing is merged — adapt that step in a generated pipeline.
-  Approved work is committed (the reviewed paths plus the issue source) before
-  the next issue starts, so no issue reviews another's diff and a later
-  `take_over` cannot stash approved work away. `COMMIT_APPROVED=0` disables the
-  commit; the run then stops after the first approval instead.
-- `pipeline-guard` is a speed bump against an agent reaching for a destructive
-  command by accident in an interactive session, **not a sandbox**. It pattern-
-  matches the command string; `rm -rf "$HOME"`, `eval`, `bash -c`, and runtime-
-  constructed commands are not a boundary. The script's own `ISSUE_SOURCE=!command`,
-  `LINT_CMD`, and `TEST_CMD` run through `eval` and are env-overridable — whoever
-  sets the run's environment has code execution, with or without the guard.
-  `LINT_CMD` and `TEST_CMD` also ship **empty**: an unadapted script runs no
-  deterministic gate at all and model review is the only check. The script warns
-  once at start and records `gates` in every JSONL log event, but adapting them
-  is the operator's job. The governance-write gate covers the
-  `write` and `edit` tools plus obvious bash and PowerShell write paths (`sed -i`,
-  `tee`, `Set-Content`, redirections, `mv`/`cp`/`rm`) that name a governance file —
-  not every way to rewrite `AGENTS.md`. `--exclude-tools bash,powershell` or a
-  container is the only real boundary. Run the pipeline in a container or VM when
-  you need isolation.
-  Without a UI it blocks rather than asks.
-- `--approve` on a child `pi -p` is much broader than the guard. pi's own trust
-  prompt states what project trust grants: `.pi` settings and resources load,
-  **missing project packages are installed, and project extensions execute**. An
-  unattended loop against a repository you do not fully trust is therefore package
-  installation plus code execution out of that repository, once per role per
-  attempt. `review.*` roles are excluded and run with `--no-approve`: it keeps the
-  trust-gated `.pi/APPEND_SYSTEM.md` from carrying panel size or the role-to-model
-  mapping into a review, and it keeps a project extension from replacing the
-  `read` / `grep` / `find` / `ls` tools the reviewers are limited to (pi lets an
-  extension register a tool under a built-in name). The remaining roles need the
-  project's own tooling and keep the flag. Containerize the run when the
-  repository is not yours.
-- Once the startup gate has passed, the script exports `PIPELINE_UNATTENDED=1`, so
-  the child `pi -p` processes are not re-blocked by `pipeline-guard` for what a
-  human already approved — except `sudo`, recursive `rm`, and force-push, which
-  stay armed unless `PIPELINE_ALLOW_DESTRUCTIVE=1`. Governance writes stay gated
-  even in an unattended run, under their own switch.
+**Severity survives JSON recovery.** Across multiple reviewer JSON blocks, the
+most severe usable findings win even if their verdict word is off-schema. A later
+well-formed `approve` cannot erase a critical finding.
 
-Multi-model review is a defence against correlated blind spots — three processes,
-at least two providers, no shared verdict. It is not a defence against the object
-under review. Issue text (`ISSUE_SOURCE=!gh issue list`, Jira) and the diff itself
-are untrusted input: a diff that instructs the panel to return an empty findings
-list passes three independent reviewers, clears the gate honestly, and the master
-approves over a real pass. The prompts frame both explicitly as content to judge
-rather than instructions, which is a mitigation, not a boundary.
+**Pi role isolation.** Research, reviewers and judges use `--no-approve -ne -ns -np`;
+saved project trust cannot enable extensions for those roles. Explicit empty
+`--system-prompt` and `--append-system-prompt` options select Pi's built-in base
+prompt without global or project system-prompt files. Authentication and model
+configuration remain available. Research and judges retain context files such as
+`AGENTS.md`; reviewers disable context-file discovery as well.
 
-| Variable | Effect |
-|---|---|
-| `PIPELINE_GUARD=off` | Disables the extension's gating |
-| `PIPELINE_UNATTENDED=1` | Allows privileged commands without a prompt (not sudo / recursive delete / force-push) |
-| `PIPELINE_ALLOW_DESTRUCTIVE=1` | Allows sudo, recursive delete, and force-push in non-interactive runs |
-| `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` | Allows the govern step to write governance non-interactively |
-| `PIPELINE_ALLOW_DEEP_SPLIT=1` | Accepts `max_split_depth > 1` |
+pi has no permission dialog and `pi -p` has no UI. The package handles that in three places:
 
-The generated script reads its own tuning variables; the defaults are safe and
-rarely need changing:
+- **The startup gate.** `--unattended` and `--auto-merge` are confirmed before the loop
+  (TTY, or `--yes`). An external issue source (`!command`, or a contract command without
+  `trust: internal`) is confirmed the same way: its text feeds every prompt.
+- **Governance integrity.** Governance files, `.pi/`, the issue source and the wrapper
+  are snapshotted before every tool-bearing role and compared afterwards. A role that
+  changed them loses the attempt, the files come back, the log says
+  `governance-modified`. That looks at files, not at commands, so `eval` and `bash -c`
+  are covered. The same set survives every stash: `take_over`, `split`, and a block,
+  which stashes the rejected tree so the next issue starts from HEAD.
+- **`pipeline-guard`.** The interactive counterpart: destructive and privileged commands
+  and governance writes are confirmed in a session and blocked without a UI. A speed
+  bump, not a sandbox — run an unattended loop over a repository you do not fully trust
+  in a container.
 
-| Variable | Default | Effect |
-|---|---|---|
-| `DIFF_MAX_BYTES` | `65536` | Cap on the working-tree diff that enters reviewer prompts; truncation is per file, omitted paths are named in a manifest |
-| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON entering the controller and master prompts; larger input is truncated and says so |
-| `EXCLUSIONS_MAX_LINES` | `200` | Cap on lint/test output re-entering the implement prompt; gate findings live separately and are never displaced |
-| `MIN_REVIEWERS` | `2` | Below this many parseable reviewers the gate blocks instead of approving. Two consecutive attempts below the floor abort as a configuration error. A value that is not an integer ≥ 1 is fatal (`die`), not reset — unlike the byte caps above. `--help` still prints because the check runs after flag parsing. `gate.mjs --min-reviewers` likewise refuses anything that is not an integer ≥ 1 |
-| `ROLE_TIMEOUT_SECONDS` | `0` | Cap around each `pi -p`. GNU `timeout`, else `gtimeout`, else unprotected. `0` disables. Exit 124 empties the outfile |
-| `PROMPT_KEEP_RUNS` | `3` | Distinct run ids kept under `.pipeline/prompts/`; older files are deleted |
-| `BLOCKER_HISTORY_MAX` | `5` | Last N `MEMORY.md` blocker entries fed into research and implement prompts |
-| `BLOCKER_HISTORY_MAX_BYTES` | `16384` | Byte cap on that history; the newest text is kept |
-| `COMMIT_APPROVED` | `1` | Commit the reviewed paths plus the issue source after an approval. `0` leaves the tree untouched and stops the run after the first approval, so the next issue never reviews it as its own diff |
+Multi-model review covers correlated blind spots, not manipulation: issue text and the
+diff are untrusted input to the whole loop, framed as such in every prompt. The full
+threat model, the trust mechanics of `--approve`, and every variable
+(`COMMIT_APPROVED`, `MIN_REVIEWERS`, `ROLE_TIMEOUT_SECONDS`, `GATE_TIMEOUT_SECONDS`, `BLOCKER_HISTORY_MAX_BYTES`, …) are in `skills/governance-pipeline/references/operations.md`.
+
+## Tests
+
+```bash
+node --test tests/     # unit tests, including commit scope, HEAD changes and init regressions
+bash tests/smoke.sh    # parity suite: every 1.0.x scenario plus the 1.2.0 additions, against a stub pi and a stub claude
+```
+
+To exercise an already installed Pi SDK without model calls:
+
+```bash
+PI_TEST_SDK_DIR="$(npm root -g)/@earendil-works/pi-coding-agent" node --test tests/unit/pi-sdk.test.mjs
+```
+
+These integration tests use Pi's actual skill loader, template parser and resource
+loader, including conflicting global system prompts and executable extensions.
+They require Node >=22.19 for Pi 0.85; without `PI_TEST_SDK_DIR`, the unit command
+reports them as skipped. The smoke suite runs them against its temporary SDK install
+on supported Node versions. On Windows, expose Git Bash on PATH or set `PIPELINE_SHELL`
+to its `bash.exe` for tests that exercise shell commands.
+
+For an opt-in live check with a configured Pi model (three billable calls):
+
+```bash
+PI_LIVE_MODEL="provider/model:low" node tests/pi-live.mjs
+# PowerShell: $env:PI_LIVE_MODEL = 'provider/model:low'; node tests/pi-live.mjs
+```
+
+This packs and installs the artifact in a temporary project, loads its extension
+through real Pi, calls `pipeline_state`, and checks a deliberately unsafe fixture
+through a real reviewer, the severity gate and a tool-free master. It never edits
+your Pi settings or installs the package globally. The 1.2.0 check passed on Pi
+0.85.1 with `openrouter/openai/gpt-5-mini:low`. It verifies live wiring and provider
+authentication, not the quality or independence of a full multi-provider panel.
+
+CI is configured to run both on Ubuntu (node 18 and 22) and Windows (node 22). The Claude Code
+adapter is verified against a stub and `claude --help`; it has no live verification in this release.
 
 ## Releasing (maintainers)
 
-Publish happens only from a pushed tag — never from a local machine. `tests/smoke.sh`
-also runs on every push to `main` and every pull request (`.github/workflows/ci.yml`),
-so a broken asset is caught before the tag. The release
-workflow runs the same suite first and then publishes via npm Trusted Publishing
-(OIDC), which attaches a provenance attestation. Once the tarball is on the
-registry, the same workflow creates the GitHub Release for the tag — from
-`release-notes.md` at the repo root when you pre-seed curated notes there
-(`### Fixed` / `### Added` / `### Changed` plus a compare link). The file must
-name the tag being released — on the right side of the compare link or as a
-heading — otherwise the workflow treats it as a leftover from the previous
-release and generates notes from the commits instead. A local `npm publish`
-bypasses both and puts a tarball on the registry that the chain never verified.
+Publish happens only from a pushed tag — never from a local machine. Both suites
+run on every push to `main` and every pull request (`.github/workflows/ci.yml`),
+so a broken engine is caught before the tag. The release workflow runs them again
+and then publishes via npm Trusted Publishing (OIDC), which attaches a provenance
+attestation. Once the tarball is on the registry, the same workflow creates the
+GitHub Release for the tag — from `release-notes.md` at the repo root when you
+pre-seed curated notes there (`### Fixed` / `### Added` / `### Changed` plus a
+compare link). The file must name the tag being released — on the right side of
+the compare link or as a heading — otherwise the workflow treats it as a leftover
+from the previous release and generates notes from the commits instead. A local
+`npm publish` bypasses both and puts a tarball on the registry that the chain
+never verified.
 
 ```bash
 # bump version in package.json, update the install examples above,

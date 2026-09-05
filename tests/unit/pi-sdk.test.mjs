@@ -1,0 +1,90 @@
+// INV-23, INV-28: exercise actual Pi parsing and resource loading, not SDK shims.
+// The smoke suite supplies its installed SDK; local runs can set PI_TEST_SDK_DIR.
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { test } from "node:test";
+import { buildArgs } from "../../lib/harness/pi.mjs";
+import { initCommand } from "../../lib/cli/init.mjs";
+import { createProject } from "../fixtures/project.mjs";
+
+const sdkDir = process.env.PI_TEST_SDK_DIR;
+const skip = !sdkDir ? "set PI_TEST_SDK_DIR to run against the real Pi SDK" : Number(process.versions.node.split(".")[0]) < 22 ? "Pi 0.85 requires Node >=22.19" : false;
+const sdk = (path) => import(pathToFileURL(join(sdkDir, "dist", path)).href);
+
+test("Pi discovers the skill without frontmatter diagnostics", { skip }, async () => {
+	const { loadSkillsFromDir } = await sdk("core/skills.js");
+	const dir = join(dirname(fileURLToPath(import.meta.url)), "../../skills/governance-pipeline");
+	const result = loadSkillsFromDir({ dir, source: "test" });
+	assert.deepEqual(result.diagnostics, []);
+	assert.equal(result.skills.length, 1);
+	assert.equal(result.skills[0].name, "governance-pipeline");
+});
+
+test("Pi expands every automate argument and init applies the requested configuration", { skip }, async () => {
+	const { expandPromptTemplate } = await sdk("core/prompt-templates.js");
+	const root = createProject();
+	const templatePath = join(dirname(fileURLToPath(import.meta.url)), "../../prompts/automate.md");
+	const content = readFileSync(templatePath, "utf8").replace(/^---[\s\S]*?---\s*/, "");
+	const templates = [{ name: "automate", content }];
+	for (const input of ["", " --harness anthropic=claude-code --local"]) {
+		const expanded = expandPromptTemplate(`/automate${input}`, templates);
+		const command = expanded.match(/`node <package>\/bin\/pipeline\.mjs init ([^`]*)`/)[1];
+		assert.equal(command, input.trim());
+		if (input) {
+			assert.equal(await initCommand(command.split(/\s+/), { root }), 0);
+			const wrapper = readFileSync(join(root, "auto-develop.sh"), "utf8");
+			assert.match(wrapper, /exec node/);
+			assert.match(wrapper, /--harness anthropic=claude-code/);
+		}
+	}
+});
+
+test("Pi excludes custom system prompts and executable extensions for every non-implementer", { skip }, async () => {
+	const { parseArgs } = await sdk("cli/args.js");
+	const { DefaultResourceLoader } = await sdk("core/resource-loader.js");
+	const { SettingsManager } = await sdk("core/settings-manager.js");
+	const { buildSystemPrompt } = await sdk("core/system-prompt.js");
+	const cwd = createProject();
+	const agentDir = mkdtempSync(join(tmpdir(), "pi-sdk-global-"));
+	for (const dir of [agentDir, join(cwd, ".pi")]) {
+		mkdirSync(join(dir, "extensions"), { recursive: true });
+		writeFileSync(join(dir, "SYSTEM.md"), "CUSTOM_SYSTEM_MARKER");
+		writeFileSync(join(dir, "APPEND_SYSTEM.md"), "CUSTOM_APPEND_MARKER");
+		writeFileSync(join(dir, "extensions", "unexpected.ts"), 'throw new Error("EXTENSION_EXECUTED_MARKER");\nexport default function () {}\n');
+	}
+	writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+	// Positive control: the fixture's global prompt files really are discoverable.
+	const control = new DefaultResourceLoader({ cwd, agentDir });
+	assert.equal(control.discoverSystemPromptFile(), join(cwd, ".pi", "SYSTEM.md"));
+	control.settingsManager.setProjectTrusted(false);
+	assert.equal(control.discoverAppendSystemPromptFile(), join(agentDir, "APPEND_SYSTEM.md"));
+	for (const isolation of ["reviewer", "research", "judge"]) {
+		const parsed = parseArgs(buildArgs({ isolation, model: "default", trusted: true }));
+		assert.equal(parsed.projectTrustOverride, false, isolation);
+		const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: true });
+		const loader = new DefaultResourceLoader({
+			cwd, agentDir, settingsManager,
+			noContextFiles: parsed.noContextFiles, noExtensions: parsed.noExtensions,
+			noSkills: parsed.noSkills, noPromptTemplates: parsed.noPromptTemplates,
+			systemPrompt: parsed.systemPrompt, appendSystemPrompt: parsed.appendSystemPrompt,
+		});
+		await loader.reload({ resolveProjectTrust: async ({ extensionsResult }) => {
+			assert.deepEqual(extensionsResult.errors, [], isolation);
+			assert.equal(extensionsResult.extensions.length, 0, isolation);
+			return parsed.projectTrustOverride;
+		} });
+		assert.deepEqual(loader.getExtensions().errors, [], isolation);
+		assert.equal(loader.getExtensions().extensions.length, 0, isolation);
+		assert.equal(loader.getSystemPrompt(), undefined, isolation);
+		assert.deepEqual(loader.getAppendSystemPrompt(), [], isolation);
+		const contextFiles = loader.getAgentsFiles().agentsFiles;
+		if (isolation === "reviewer") assert.deepEqual(contextFiles, []);
+		else assert.ok(contextFiles.some((file) => file.path === join(cwd, "AGENTS.md")));
+		const prompt = buildSystemPrompt({ cwd, selectedTools: parsed.tools ?? [], customPrompt: loader.getSystemPrompt(), appendSystemPrompt: loader.getAppendSystemPrompt().join("\n"), contextFiles });
+		assert.match(prompt, /expert coding assistant/);
+		assert.doesNotMatch(prompt, /CUSTOM_SYSTEM_MARKER|CUSTOM_APPEND_MARKER/);
+	}
+});

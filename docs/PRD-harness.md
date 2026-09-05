@@ -113,7 +113,7 @@ Zwei getrennte Größen, die nicht vermischt werden dürfen:
 ## 5. Offene Entscheidungen
 
 - `[USER DECISION REQUIRED]` Konkrete Modelle und Anbieter je Rolle
-- `[USER DECISION REQUIRED]` Budgetvererbung an Sub-Issues (Kontovariante vs. anteilige Aufteilung des Restbudgets)
+- ~~`[USER DECISION REQUIRED]` Budgetvererbung an Sub-Issues (Kontovariante vs. anteilige Aufteilung des Restbudgets)~~ **Entschieden 2026-09-05 (1.2.0): Kontovariante.** Das Baumbudget liegt an der Wurzel und wird von allen Kindern verbraucht; Versuche zählen pro Kind neu. Begründung in `MEMORY.md`.
 - `[USER DECISION REQUIRED]` Zielwert für `max_runs_per_tree` — 25 ist ein Vorschlag, keine gemessene Größe
 - `[NEEDS CLARIFICATION]` Wird Pi das primäre Harness oder laufen Claude Code und Pi parallel als austauschbare Backends?
 

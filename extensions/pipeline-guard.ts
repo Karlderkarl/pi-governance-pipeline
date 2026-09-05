@@ -1,11 +1,12 @@
 /**
- * pipeline-guard — the runtime half of the governance pipeline's safety rule.
+ * pipeline-guard — the interactive half of the governance pipeline's safety rule.
  *
  * The pipeline itself gates privileged work at startup, because `pi -p` has no
- * UI to ask with. This extension covers the other case: an interactive session
- * where the agent reaches for a privileged command on its own. It also exposes
- * the pipeline state the harness owns, so the model can read counters without
- * ever holding them.
+ * UI to ask with, and checks governance integrity by snapshot around every
+ * tool-bearing role. This extension covers the other case: an interactive
+ * session where the agent reaches for a privileged command on its own. It also
+ * exposes the pipeline state the harness owns, so the model can read counters
+ * without ever holding them.
  *
  * Off-switch: PIPELINE_GUARD=off. Unattended runs: PIPELINE_UNATTENDED=1 skips
  * the privileged-command confirmations (a human pre-answered them at the
@@ -17,118 +18,19 @@
  *
  * This is a speed bump, not a sandbox. Patterns match the command string the
  * agent typed, not a security boundary: `rm -rf "$HOME"`, `eval`, `bash -c`,
- * and runtime-constructed commands slip through. The governance gate covers
- * the `write` and `edit` tools, plus obvious bash/PowerShell write paths that
- * name a governance file. It is not a sandbox; `--exclude-tools bash,powershell`
- * or a container is the only real boundary. Run the pipeline in a container or
- * VM when you need isolation.
+ * and runtime-constructed commands slip through. `--exclude-tools bash,powershell`
+ * or a container is the only real boundary. The patterns and the governance
+ * names live in lib/ (one list for the diff filter, the stash protection, the
+ * integrity snapshot and this guard) and are unit-tested there; so does the
+ * status text, shared with `pipeline status`.
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-
-// Always armed, including unattended runs, unless PIPELINE_ALLOW_DESTRUCTIVE=1.
-const DESTRUCTIVE: Array<{ pattern: RegExp; reason: string }> = [
-	{ pattern: /\bgit\s+push\b[^\n]*\s(--force|-f)\b/, reason: "force-push" },
-	{ pattern: /\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\b/, reason: "recursive delete" },
-	{ pattern: /\bRemove-Item\b[^\n]*\s-(Recurse|r)\b/i, reason: "recursive delete" },
-	{ pattern: /\bsudo\b/, reason: "privilege escalation" },
-	{ pattern: /\bStart-Process\b[^\n]*\s-Verb\s+RunAs\b/i, reason: "privilege escalation" },
-];
-
-const PRIVILEGED: Array<{ pattern: RegExp; reason: string }> = [
-	{ pattern: /\bgit\s+push\b[^\n]*\b(main|master)\b/, reason: "push to a protected branch" },
-	{ pattern: /\bgit\s+reset\s+--hard\b/, reason: "hard reset (discards work)" },
-	{ pattern: /\bgh\s+pr\s+merge\b/, reason: "pull request merge" },
-	{ pattern: /\bcurl\b[^\n|]*\|\s*(ba)?sh\b/, reason: "piping a download into a shell" },
-	{ pattern: /\bnpm\s+publish\b|\bpi\s+install\b/, reason: "package publish or install" },
-];
-
-// AGENTS.override.md replaces AGENTS.md in every pi process; AGENTS.MD and
-// CLAUDE.MD are pi's other context-file spellings; .pi/settings.json enables
-// extensions that a child with --approve then executes. All of it is governance.
-const GOVERNANCE = [
-	"SOUL.md",
-	"AGENTS.md",
-	"AGENTS.override.md",
-	"AGENTS.MD",
-	"APPEND_SYSTEM.md",
-	"SYSTEM.md",
-	"CLAUDE.md",
-	"CLAUDE.MD",
-	"MEMORY.md",
-	".pi/settings.json",
-];
-
-const GOV_ALT = GOVERNANCE.map((g) => g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-// One governance path as a shell word: optional quote, optional directory
-// prefix, the name, optional quote. Group 1 is the name.
-const GOV_TOKEN = `["']?(?:[^\\s"'|;&<>]*/)?(${GOV_ALT})["']?`;
-const END = `(?=\\s|$|[;|&)])`;
-// The governance file has to be the *target* of the write. A governance name
-// anywhere near a `>` used to count, which blocked `cat AGENTS.md 2>/dev/null`
-// in every non-interactive child — a read, on the path the roles need most.
-const WRITE_PATTERNS: RegExp[] = [
-	// redirection into the file; `2>/dev/null` and `>&2` have other targets
-	new RegExp(`(?:^|[^0-9])>>?\\s*${GOV_TOKEN}${END}`),
-	new RegExp(`(?:^|[\\s;|&(])tee\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
-	new RegExp(`(?:^|[\\s;|&(])sed\\b[^|;&]*?\\s-[a-zA-Z]*i\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
-	// mv/cp write their last argument; `cp AGENTS.md /tmp/backup` is a read
-	new RegExp(`(?:^|[\\s;|&(])(?:mv|cp)\\s+(?:\\S+\\s+)+${GOV_TOKEN}\\s*(?:$|[;|&)])`),
-	new RegExp(`(?:^|[\\s;|&(])rm\\b[^|;&]*?\\s${GOV_TOKEN}${END}`),
-	new RegExp(
-		`(?:^|[\\s;|&(])(?:Set-Content|Add-Content|Out-File|Move-Item|Copy-Item|Remove-Item)\\b[^|;&]*?\\s${GOV_TOKEN}${END}`,
-		"i",
-	),
-];
-
-function shellWritesGovernance(command: string): string | undefined {
-	for (const re of WRITE_PATTERNS) {
-		const m = re.exec(command);
-		if (m) return m[1];
-	}
-	return undefined;
-}
-
-function governancePath(path: string): string | undefined {
-	const p = path.replace(/\\/g, "/");
-	return GOVERNANCE.find((g) => p === g || p.endsWith(`/${g}`));
-}
-
-function stateDir(cwd: string): string {
-	return join(cwd, ".pipeline", "state");
-}
-
-function readStates(cwd: string): Record<string, unknown> {
-	const dir = stateDir(cwd);
-	if (!existsSync(dir)) return {};
-	const out: Record<string, unknown> = {};
-	for (const file of readdirSync(dir).filter((f) => f.endsWith(".json"))) {
-		try {
-			out[file.replace(/\.json$/, "")] = JSON.parse(readFileSync(join(dir, file), "utf8"));
-		} catch {
-			out[file.replace(/\.json$/, "")] = { error: "unreadable state file" };
-		}
-	}
-	return out;
-}
-
-function summarize(states: Record<string, any>): string {
-	const keys = Object.keys(states);
-	if (keys.length === 0) return "No pipeline state in .pipeline/state — nothing has run in this project yet.";
-	return keys
-		.map((root) => {
-			const s = states[root];
-			const issues = Object.entries(s.issues ?? {})
-				.map(([id, i]: [string, any]) => `    ${id}: ${i.status} (controller ${i.attempts_controller}, master ${i.attempts_master})`)
-				.join("\n");
-			return `${root}: ${s.runs_used}/${s.max_runs_per_tree} runs used, depth ${s.depth}\n${issues}`;
-		})
-		.join("\n\n");
-}
+import { DESTRUCTIVE, PRIVILEGED, shellWritesGovernance, governancePath } from "../lib/guard/patterns.mjs";
+import { readStates, statusText } from "../lib/cli/status.mjs";
 
 export default function (pi: ExtensionAPI) {
 	const enabled = process.env.PIPELINE_GUARD !== "off";
@@ -147,10 +49,7 @@ export default function (pi: ExtensionAPI) {
 						reason: `pipeline-guard: refused ${destructive.reason} in a non-interactive session. Set PIPELINE_ALLOW_DESTRUCTIVE=1 deliberately to allow it.`,
 					};
 				}
-				const ok = await ctx.ui.confirm(
-					"Destructive command",
-					`${destructive.reason}:\n\n${command}\n\nAllow?`,
-				);
+				const ok = await ctx.ui.confirm("Destructive command", `${destructive.reason}:\n\n${command}\n\nAllow?`);
 				if (!ok) return { block: true, reason: `pipeline-guard: ${destructive.reason} declined by the user` };
 				// Fall through deliberately. A confirmed destructive command is still a
 				// governance write or a privileged command if it is one: `sudo tee
@@ -212,7 +111,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("pipeline-status", {
 		description: "Show auto-develop pipeline counters, budget, and issue status",
 		handler: async (_args, ctx) => {
-			ctx.ui.notify(summarize(readStates(ctx.cwd)), "info");
+			ctx.ui.notify(statusText(join(ctx.cwd, ".pipeline")).trimEnd(), "info");
 		},
 	});
 
@@ -225,7 +124,7 @@ export default function (pi: ExtensionAPI) {
 			root_id: Type.Optional(Type.String({ description: "Root issue id. Omit for every tree." })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const states = readStates(ctx.cwd);
+			const states = readStates(join(ctx.cwd, ".pipeline")) as Record<string, unknown>;
 			const selected = params.root_id ? { [params.root_id]: states[params.root_id] ?? null } : states;
 			return {
 				content: [{ type: "text", text: JSON.stringify(selected, null, 2) }],
