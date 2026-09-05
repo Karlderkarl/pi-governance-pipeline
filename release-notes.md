@@ -26,6 +26,7 @@ The pipeline moves out of the skill and into the package. 1.0.x asked a model to
 ### Fixed
 
 - **Portable test discovery.** `npm test` uses `node --test` without a directory argument; Node 22 does not accept the `tests/` directory form used in the initial workflow. CI and release publishing share this entrypoint.
+- **Windows integrity diagnostics use canonical paths.** Reports remain project-relative when the project or temp directory is reached through a junction, symlink or short-path alias; snapshots and the report now use the same canonical base.
 - **Review severity survives mixed JSON schemas.** Critical findings with an off-schema verdict can no longer lose to an empty, well-formed approval in another block. Non-string finding titles no longer crash the severity gate.
 - **Commit failures always fail the run.** A failed approval commit exits non-zero even on the last issue; a failed split-parent closing commit halts before the next issue. A halt after the last child leaves its parent open. Approved work and checkbox changes remain available for a manual commit.
 - **Approval commits exclude unrelated staged files.** Only reviewed paths and the issue source are committed; previously staged governance or wrapper changes stay in the index. Both ends of a rename are included, including an already-staged deletion.
@@ -41,7 +42,7 @@ The pipeline moves out of the skill and into the package. 1.0.x asked a model to
 
 ### Validation
 
-- 83 tests passed on Windows, including integration checks against the installed Pi 0.85.1 SDK; no skipped tests in that run.
+- 84 tests passed on Windows, including integration checks against the installed Pi 0.85.1 SDK; no skipped tests in that run.
 - Full `tests/smoke.sh` suite passed (`smoke OK`), including extension type-checking against the real SDK and the Pi resource-loader checks.
 - ShellCheck passed for the wrapper fixture and smoke suite; `git diff --check` passed.
 - The packed-artifact live check passed against installed Pi 0.85.1 using `openrouter/openai/gpt-5-mini:low`: extension loaded without local SDK dependencies, `pipeline_state` executed, a reviewer detected the seeded authorization regression, and the tool-free master rejected the blocked attempt.

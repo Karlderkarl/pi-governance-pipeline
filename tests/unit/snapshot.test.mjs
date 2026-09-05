@@ -1,7 +1,7 @@
 // snapshot.test.mjs — INV-20 (governance integrity by snapshot) and INV-14
 // (one governance path list).
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -59,6 +59,22 @@ test("snapshot compares by hash, keeps big files on disk, and the after-snapshot
 	writeFileSync(join(root, "AGENTS.md"), "changed");
 	const d2 = compareSnapshots(hashOnlyBefore, takeSnapshot(paths, { hashOnly: true }));
 	assert.equal(restoreSnapshot(hashOnlyBefore, d2).length, 1);
+});
+
+test("snapshot diagnostics stay project-relative through a directory alias", () => {
+	const work = mkdtempSync(join(tmpdir(), "snap-alias-"));
+	const target = join(work, "actual");
+	const alias = join(work, "alias");
+	mkdirSync(target);
+	symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+	const path = join(alias, "AGENTS.md");
+	writeFileSync(path, "before");
+	const before = takeSnapshot([path]);
+	writeFileSync(path, "after");
+	const diff = compareSnapshots(before, takeSnapshot([path]));
+	assert.equal(describeDiff(alias, diff), "modified: AGENTS.md");
+	assert.deepEqual(restoreSnapshot(before, diff), []);
+	assert.equal(readFileSync(path, "utf8"), "before");
 });
 
 test("governance paths: one list feeds the diff filter, the pathspecs and the guard", () => {
