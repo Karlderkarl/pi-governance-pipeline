@@ -39,7 +39,7 @@ jobs:
         run: shellcheck -S warning tests/fixtures/auto-develop.sh tests/smoke.sh
 
       - name: Unit tests
-        run: node --test tests/
+        run: npm test
 
       # The parity suite: every 1.0.x scenario plus the 1.2.0 additions,
       # against a stub pi and a stub claude. Needs bash (Git Bash on Windows).

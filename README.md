@@ -222,7 +222,7 @@ threat model, the trust mechanics of `--approve`, and every variable
 ## Tests
 
 ```bash
-node --test tests/     # unit tests, including commit scope, HEAD changes and init regressions
+npm test              # unit tests, including commit scope, HEAD changes and init regressions
 bash tests/smoke.sh    # parity suite: every 1.0.x scenario plus the 1.2.0 additions, against a stub pi and a stub claude
 ```
 
@@ -238,6 +238,8 @@ They require Node >=22.19 for Pi 0.85; without `PI_TEST_SDK_DIR`, the unit comma
 reports them as skipped. The smoke suite runs them against its temporary SDK install
 on supported Node versions. On Windows, expose Git Bash on PATH or set `PIPELINE_SHELL`
 to its `bash.exe` for tests that exercise shell commands.
+`npm test` uses `node --test` without a directory argument so discovery works
+across Node 18, 22 and newer versions.
 
 For an opt-in live check with a configured Pi model (three billable calls):
 

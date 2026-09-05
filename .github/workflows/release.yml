@@ -48,7 +48,7 @@ jobs:
       # The value of this package is the correctness of its engine — never
       # publish a tarball whose engine fails either suite.
       - name: Unit tests
-        run: node --test tests/
+        run: npm test
 
       - name: Parity suite
         run: bash tests/smoke.sh

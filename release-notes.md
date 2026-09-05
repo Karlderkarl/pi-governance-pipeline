@@ -25,6 +25,7 @@ The pipeline moves out of the skill and into the package. 1.0.x asked a model to
 
 ### Fixed
 
+- **Portable test discovery.** `npm test` uses `node --test` without a directory argument; Node 22 does not accept the `tests/` directory form used in the initial workflow. CI and release publishing share this entrypoint.
 - **Review severity survives mixed JSON schemas.** Critical findings with an off-schema verdict can no longer lose to an empty, well-formed approval in another block. Non-string finding titles no longer crash the severity gate.
 - **Commit failures always fail the run.** A failed approval commit exits non-zero even on the last issue; a failed split-parent closing commit halts before the next issue. A halt after the last child leaves its parent open. Approved work and checkbox changes remain available for a manual commit.
 - **Approval commits exclude unrelated staged files.** Only reviewed paths and the issue source are committed; previously staged governance or wrapper changes stay in the index. Both ends of a rename are included, including an already-staged deletion.
