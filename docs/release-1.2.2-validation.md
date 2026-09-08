@@ -20,6 +20,20 @@ README, Release Notes, Operations, Prompt-Dokumentation und Invarianten wurden a
 
 ## Verifikation
 
-Die abschließenden Ergebnisse werden vor dem Release-Commit eingetragen. Lokal laufen die Prüfungen auf Windows mit Node 26.8.1 und Git Bash. Die Modelle werden durch deterministische Rollenprozesse ersetzt; Git-Operationen, Dateisystem-Verknüpfungen und Prozesskonkurrenz sind real. Der Pi SDK wird für die Integrationstests tatsächlich geladen.
+Lokale Ergebnisse auf Windows mit Node 26.8.1 und Git Bash:
 
-Die CI-Matrix prüft zusätzlich Ubuntu mit Node 18 und 22 sowie Windows mit Node 22. Der Release-Workflow testet erneut auf Ubuntu/Node 22 und veröffentlicht erst danach per npm Trusted Publishing. Ein echter Modelllauf und macOS sind für diese Version nicht geprüft. Die Integritätskontrollen sind Prozessgrenzen innerhalb derselben OS-Berechtigungen, keine Betriebssystem-Sandbox.
+| Prüfung | Ergebnis |
+|---|---|
+| `npm test` mit echtem Pi SDK | **144 bestanden, 0 fehlgeschlagen, 0 übersprungen** |
+| `bash tests/smoke.sh` | vollständig bestanden, `smoke OK` |
+| SDK innerhalb der Smoke-Suite | echter Bootstrap, TypeScript 5.8.3, 5/5 SDK-Integrationstests; kein Shim-Fallback |
+| Guard-Verhalten | bestanden; die isolierte Fixture kopiert auch die neue Git-Hilfsabhängigkeit |
+| ShellCheck und `git diff --check` | bestanden |
+| `npm pack --dry-run` | 58 Dateien, 102.945 Byte Archiv, 313.878 Byte entpackt; Version 1.2.2 |
+| GitHub-Release-Text | Extraktion ausschließlich des Abschnitts 1.2.2 geprüft |
+
+Der lokale SDK-Bootstrap verwendete mit `NODE_USE_SYSTEM_CA=1` den Windows-Zertifikatsspeicher; die TLS-Prüfung blieb aktiv. Ein vorheriger Smoke-Durchlauf deckte die fehlende Kopie von `util/exec.mjs` in der Guard-Fixture auf. Nach deren Korrektur bestanden der gezielte Guard-Test und der vollständige erneute Durchlauf.
+
+Die Modelle werden durch deterministische Rollenprozesse ersetzt; Git-Operationen, Dateisystem-Verknüpfungen und Prozesskonkurrenz sind real. Der Pi SDK wird für die Integrationstests tatsächlich geladen.
+
+Die [CI-Matrix für den geprüften Code-Commit `f42e95d`](https://github.com/Karlderkarl/pi-governance-pipeline/actions/runs/34225066616) ist vollständig bestanden: Ubuntu mit Node 18 und 22 sowie Windows mit Node 22, jeweils Unit- und Smoke-Suite. Der abschließende Release-Commit ergänzt ausschließlich diesen Ergebnisbericht; der geprüfte Engine-Code bleibt unverändert. Der Release-Workflow testet den Tag erneut auf Ubuntu/Node 22 und veröffentlicht erst danach per npm Trusted Publishing. Ein echter Modelllauf und macOS sind für diese Version nicht geprüft. Die Integritätskontrollen sind Prozessgrenzen innerhalb derselben OS-Berechtigungen, keine Betriebssystem-Sandbox.
