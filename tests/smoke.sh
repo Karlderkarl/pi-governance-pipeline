@@ -1504,6 +1504,7 @@ case "$last" in
 esac
 EOF
 chmod +x "$stub_hang/pi"
+node "$ROOT/tests/fixtures/timeout-probe.mjs" "$proj_toj" "$stub_hang/pi"
 rc=0
 hang_start="$(date +%s)"
 out="$(cd "$proj_toj" && PATH="$stub_hang:$PATH" ROLE_TIMEOUT_SECONDS=1 bash auto-develop.sh 2>&1)" || rc=$?
@@ -1511,10 +1512,14 @@ hang_elapsed=$(( $(date +%s) - hang_start ))
 [[ $rc -ne 0 ]] || fail "hanging reviewers were approved: $out"
 grep -q '"status":"124"' "$proj_toj"/.pipeline/logs/issue-timeout/*.jsonl || fail "timeout not recorded as status 124 in the run log"
 echo "$out" | grep -qi "Configuration error" || fail "a panel that always times out must end as a configuration error: $out"
-# INV-29: the stub's `sleep 20` is a grandchild holding stdout; the timeout
-# must end it too. Two attempts of 1 s + 3 × 1 s retries each, plus process
-# start-up, must stay far below one sleep.
-[[ $hang_elapsed -le 30 ]] || fail "timeout waited on the grandchild: ${hang_elapsed}s for two attempts with ROLE_TIMEOUT_SECONDS=1"
+# The direct probe above measures process-tree termination. This integration
+# scenario checks retries and fail-closed gating; its total also includes Git
+# snapshots and filesystem work, so it is not a role-timeout measurement.
+[[ $(grep -h -c '"status":"124"' "$proj_toj"/.pipeline/logs/issue-timeout/*.jsonl) -eq 12 ]] || fail "expected twelve timed-out reviewers across two attempts"
+# Separate end-to-end regression ceiling: allow margin above the observed 36 s
+# Windows run, while retaining a hard bound on the complete scenario.
+echo "timeout integration scenario: ${hang_elapsed}s (ceiling 60s)"
+[[ $hang_elapsed -le 60 ]] || fail "timeout integration scenario exceeded its 60s regression ceiling: ${hang_elapsed}s"
 
 # ---------------------------------------------------------------- P1.3 credential preflight must not auth-check model ids
 if grep -rE '^[^/]*auth check --model' "$ROOT/lib" >/dev/null; then

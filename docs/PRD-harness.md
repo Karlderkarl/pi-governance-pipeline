@@ -79,7 +79,7 @@ models:
 
 **R4** — Die drei Reviewer laufen in getrennten Prozessen mit getrennten Kontexten und sehen die Urteile der anderen nicht.
 **R5** — Jeder Reviewer liefert JSON nach festem Schema: Liste von Findings mit `severity` (critical/high/medium/low), `file`, `line`, `rationale`, plus ein Gesamtvotum.
-**R6** — Freigabekriterium ist **severity-basiert**, nicht prozentual: kein `critical` oder `high` blockiert; `medium` und `low` werden zu Folge-Tickets. *(Ersetzt die ursprüngliche 80-%-Regel, die bei drei Reviewern faktisch Einstimmigkeit verlangte.)*
+**R6** — Freigabekriterium ist **severity-basiert**, nicht prozentual: `critical` und `high` verhindern die Freigabe; `medium` und `low` werden festgehalten und sichtbar gemacht: bei der Freigabe schreibt die Engine sie als `## Follow-ups — <id> (<datum>)` nach MEMORY.md, zusätzlich zum `gate.json` des Versuchs. Die Übernahme ins Backlog erfolgt durch den Menschen; die Pipeline legt keine Tickets an. *(Ersetzt die ursprüngliche 80-%-Regel, die bei drei Reviewern faktisch Einstimmigkeit verlangte.)*
 
 ### 4.3 Controller und Master
 

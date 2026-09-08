@@ -1,12 +1,13 @@
 ---
 name: governance-pipeline
 description: Generate or audit project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md, the pipeline contract) from a PRD, or set up, dry-run, run and audit the issue-driven auto-develop pipeline shipped in this package (auto-develop.sh, /govern, /automate, /pipeline-audit). Use for these workflows, not merely because a repository contains AGENTS.md.
-compatibility: Requires pi, bash, git and credentials for the configured providers. The engine supports Node >=18; Pi 0.85 requires Node >=22.19.
 ---
 
 # Governance Pipeline
 
 Governance is the source of truth; the versioned engine reads it. Never write or copy the loop, or add loop logic to the project's pinned `auto-develop.sh` wrapper.
+
+Requires pi, bash, git and credentials for the configured providers. The engine supports Node >=18; also satisfy the installed Pi package's `engines.node` requirement.
 
 Run commands in the project root. `<package>` is two levels above the directory containing this `SKILL.md`; `pi list` can locate the installed package. Load only the references required by the selected mode.
 
@@ -16,10 +17,10 @@ Generate governance, or audit it after PRD/repository changes. Read [governance-
 
 1. Read the PRD and inspect the actual repository: stack, architecture, security/compliance needs, dependencies and lint/test/type-check commands. Report conflicts rather than choosing silently.
 2. Resolve roles, models, git conventions, budgets, gates and issue source with the human. Present the proposed changes before writing; for existing files, audit first and ask per file: overwrite, merge or skip.
-3. Write the four governance files and harness copies as specified in the references. New contracts use `yaml pipeline-contract` with `contract_version: 2`, `issues.source` and `gates`. Mark unresolved decisions with `[USER DECISION REQUIRED]` or `[NEEDS PRD CLARIFICATION]`; never invent answers. A marker anywhere in governance fails `doctor` and refuses a real run; a dry-run only notes it. Do not quote the marker text elsewhere in governance.
-4. Validate before handing over: `node <package>/bin/pipeline.mjs doctor`. Before `automate`, three findings are expected and are resolved by `init`: the missing wrapper, `.pipeline/` not yet gitignored, a missing issue file; a FAIL naming an intentional marker is the intended state. Report these as such and fix every other FAIL: a contract FAIL means the block is wrong, not the project.
+3. Write the four governance files and harness copies as specified in the references. New contracts use exactly one `yaml pipeline-contract` block with `contract_version: 2`, `issues.source` and `gates`. Mark unresolved decisions with `[USER DECISION REQUIRED]` or `[NEEDS PRD CLARIFICATION]`; the legacy `[NEEDS CLARIFICATION]` also blocks startup. Never invent answers or quote these marker phrases elsewhere in governance, even without brackets. A marker fails `doctor` and refuses a real run; a dry-run only notes prose markers (contract markers still fail validation).
+4. Validate before handing over: `node <package>/bin/pipeline.mjs doctor`. Typical pre-automate setup findings are a missing wrapper (WARN), `.pipeline/` not gitignored (FAIL), or a missing file issue source (FAIL); `init` resolves them. A missing HEAD is a separate prerequisite for a real run, not for generating governance or running `init`. Report intentional decision-marker FAILs and these setup prerequisites explicitly; fix other FAILs within the requested scope. Contract errors require correcting the block.
 
-Under `pi -p`, do not ask questions: an existing-governance audit stays read-only; authorized generation leaves markers for unresolved decisions. Governance writes require interactive confirmation or, for unattended govern, `PIPELINE_ALLOW_GOVERNANCE_WRITE=1`. The pipeline itself must never write governance.
+Under `pi -p`, do not ask questions: an existing-governance audit stays read-only; authorized generation leaves markers for unresolved decisions. Governance writes require interactive confirmation or, for unattended govern, `PIPELINE_ALLOW_GOVERNANCE_WRITE=1`. Model roles never write governance; only the engine may append blocker, review-pause and approval follow-up history to `MEMORY.md`.
 
 ## Mode: automate
 

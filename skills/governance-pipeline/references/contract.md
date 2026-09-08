@@ -16,16 +16,18 @@ The versioned interface between governance and the pipeline. `govern` writes the
 
 ## Reading rules
 
-- All fields live in `AGENTS.md`, in a fenced YAML block (` ```yaml ` or ` ```yml `), marked `yaml pipeline-contract`. If several YAML fences contain contract keys, the marked one is used; otherwise the first is used and a warning names how many were found. A `~~~` fence or an unclosed backtick fence does not parse.
+- All fields live in `AGENTS.md`, in a fenced YAML block (` ```yaml ` or ` ```yml `). Mark exactly one as `yaml pipeline-contract`: multiple marked fences are a contract error, even if one is an example. A marked block must contain at least one recognized top-level contract field; empty, comment-only or unrelated example blocks refuse instead of selecting defaults. Without a marked fence, the first YAML fence containing contract keys is used and multiple candidates produce a warning. A `~~~` fence or an unclosed backtick fence does not parse.
 - If the file contains `pipeline-contract` or a line matching `models:` / `budgets:` / `review:` / `contract_version:`, **but no fenced YAML block parsed**, that is a contract error (exit 2) — not silent defaults. A file with neither still takes the documented default path.
 - The YAML subset: block maps, block sequences, inline maps `{ a: b }`, inline lists `[a, b]`, quoted and plain scalars, booleans, integers, null, `#` comments. Quotes protect commas, colons and `#`, so `run: "eslint --ext .js,.ts src"` survives intact. Block scalars (`|`, `>`), anchors, aliases, tags, nested sequences (`- - x`) and duplicate keys are contract errors that name the construct — a second `implement:` never silently wins.
 - Every field is optional in v1. Absence is a documented state, never an error. In v2, `issues.source` and `gates` are required (see below).
 - Unknown fields are ignored, not rejected — forward compatibility. They still produce a **warning** that names the key (`models.implement_msater`, `budgets.max_atempts_controller`, …) so a typo cannot vanish into the merged config.
-- A value carrying a decision marker (`[USER DECISION REQUIRED]`, `[NEEDS PRD CLARIFICATION]`, quoted or not) is not a value: the field counts as undecided and validation refuses with the field named. That is how `govern` hands an open decision to the human without the pipeline running on a placeholder.
+- A value carrying a decision phrase (`USER DECISION REQUIRED`, `NEEDS PRD CLARIFICATION`, or legacy `NEEDS CLARIFICATION`, with or without brackets/quotes) counts as undecided and validation refuses with the field named. Use markers only for open decisions, not as quoted examples in governance.
 
 ## Example
 
-```yaml pipeline-contract
+The example below is unmarked to keep it distinguishable from an active contract. When generating `AGENTS.md`, mark its single active block as `yaml pipeline-contract`.
+
+```yaml
 contract_version: 2
 
 models:
@@ -87,7 +89,9 @@ Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` im
 
 ## review
 
-Any finding at a blocking severity rejects the attempt. Findings at follow-up severities are recorded in the gate JSON and fed back on retry. Severity is normalised with trim + lower-case. A finding whose severity is not `critical`, `high`, `medium`, `low` is **blocking** (`unknown_severity`); a known severity that appears in neither list also blocks (`unlisted_severity`), and the validator refuses such a pair of lists up front. Both lists may be written inline (`[critical, high]`) or as a block sequence.
+Any finding at a blocking severity rejects the attempt. Findings at follow-up severities are recorded in the gate JSON, fed back on retry, and appended to `MEMORY.md` when the issue is approved. Severity is normalised with trim + lower-case. A finding whose severity is not `critical`, `high`, `medium`, `low` is **blocking** (`unknown_severity`); a known severity that appears in neither list also blocks (`unlisted_severity`), and the validator refuses such a pair of lists up front. Both lists may be written inline (`[critical, high]`) or as a block sequence.
+
+Approval creates no tickets. It appends the accepted follow-ups to `MEMORY.md` as `## Follow-ups — <id> (<date>)`, because `gate.json` lives under the gitignored `.pipeline/`. Triage them into the project's backlog by hand. This applies to file and command issue sources alike.
 
 ## issues
 
@@ -97,12 +101,15 @@ Where open issues come from. Required in v2.
 |---|---|
 | `source: tasks.md` | A checkbox file: `- [ ] <id>: <title>` per open issue, `- [x]` when done. Children of a split are indented under their parent (`  - [ ] <id>.1: …`). The pipeline marks issues done and creates children here |
 | `source: { command: "…", trust: external }` | A command whose stdout lists `id: title` lines. It cannot create children, so a split becomes a reject. `trust: external` (the default for commands) makes a real run ask for confirmation, because the issue text is foreign input to every prompt; `trust: internal` skips that |
+| `source: "!command"` | Command shorthand, also accepted inside the contract. Always external; the same startup confirmation applies. Use the map form to declare internal trust |
 
 `ISSUE_SOURCE` in the environment (a file, or `!command`) overrides the contract for one run.
 
 ## gates
 
 The deterministic checks that run after every implementation and before any model-based review, in order. Required in v2: list them, or write `gates: []` to run without one on purpose (a warning at every start). A gate is `{ name, run }`; `name` is a short identifier that labels the log and the feedback block, `run` a shell command. A failing gate feeds its output back into the next implement prompt and costs the attempt without spending a review cycle. Fold clean-code checks (complexity, duplication) in as further gates; there is no separate slot. `LINT_CMD` / `TEST_CMD` in the environment replace the list for one run.
+
+The shorthand `gates: { lint: "npm run lint", test: "npm test" }` is also accepted and normalized to the ordered list of `{ name, run }` entries. Generate the list form for consistency; do not reject an existing valid map during an audit.
 
 ## Absent-field behaviour
 

@@ -5,8 +5,10 @@ auto-develop pipeline from that governance: one deliberately chosen model per st
 independent multi-model review, severity-based gating, and a hard run budget.
 The pipeline ships in the package. The skill configures it; nothing is copied.
 
-Version 1.2.2 hardens review evidence, commit contents, state and filesystem
-recovery, and adds resumable review pauses with explicit human binary review.
+Version 1.2.3 closes the review findings of the two independent 1.2.2 reviews:
+retry evidence, Git-filter and submodule boundaries at capture and approval, and
+unambiguous contract marking. Accepted follow-up findings are recorded in
+`MEMORY.md` instead of a gitignored file.
 See [release notes](release-notes.md).
 
 ```
@@ -45,18 +47,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.2.2
+pi install npm:pi-governance-pipeline@1.2.3
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.2
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.3
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.2.2
+pi -e npm:pi-governance-pipeline@1.2.3
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.2
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.3
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -147,7 +149,7 @@ docs/                         repository only, not packed
   invariants.md                INV-01 … INV-29, each with the test that pins it
 ```
 
-Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.2/docs/prompt-builders.md).
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.3/docs/prompt-builders.md).
 This repository-only document is not required to use the installed skill.
 
 ## The contract
@@ -202,9 +204,9 @@ Only missing keys receive defaults.
 
 **Complete diff coverage is required.** A real run stops before review if any
 changed content is truncated or omitted from the diff. `DIFF_MAX_BYTES` defaults
-to 65,536 bytes shared across files; dry-run can still render a bounded preview.
+to 524,288 bytes (512 KiB) shared across files; dry-run can still render a bounded preview.
 Work remains uncommitted: reduce the change or raise the cap for text changes and
-resume. Binary changes require a separate review workflow. A manifest alone does
+resume; see the review content and resumption guidance below for binary receipts and submodules. A manifest alone does
 not authorize a commit, and complete prompt coverage does not prove model understanding.
 
 **Approval has a defined commit scope.** Approval commits the reviewed paths and the
@@ -227,6 +229,12 @@ configured blocking membership before comparing severity ranks.
 Failed reviewer processes never count toward the panel minimum. A retry must
 preserve configured blocking evidence even when severity lists use an unusual partition.
 
+**Follow-ups are recorded, never ticketed.** Findings at a follow-up severity do not
+block the approval. They are fed back on a retry, and an approval appends them to
+`MEMORY.md` as `## Follow-ups — <id> (<date>)`, because `gate.json` lives under the
+gitignored `.pipeline/`. Triage them into the backlog by hand; the pipeline creates no
+issues and never reads these entries back into a prompt.
+
 **State belongs to the engine.** State and Git configuration/hooks are checked
 around model and gate processes using snapshots held in parent memory. A change
 or deletion is restored and stops the run; reserved attempts remain counted.
@@ -242,8 +250,12 @@ the work. Unchanged restarts check coverage before launching another model;
 started attempts are never refunded. Increase `DIFF_MAX_BYTES` or reduce the
 change to resume. Binary content requires a human review receipt bound to its
 SHA-256; follow [Binary review](skills/governance-pipeline/references/operations.md#binary-review).
+Changed submodule pointers require separate review and a manual parent-repository
+commit before resuming; neither a binary receipt nor a larger text cap approves them.
 The engine captures Git-normalized blobs in an isolated index and commits those
 same blobs, so clean filters cannot add implementation bytes after review.
+Capture checks protected files and HEAD around filter execution; approval stores
+the engine-owned issue file without clean filters.
 Filesystem snapshots preserve links themselves and never recursively delete a
 new link's target when restoring protected paths.
 

@@ -77,6 +77,20 @@ test("snapshot diagnostics stay project-relative through a directory alias", () 
 	assert.equal(readFileSync(path, "utf8"), "before");
 });
 
+test("a changed disk recovery copy is refused instead of restored into governance", () => {
+	const root = mkdtempSync(join(tmpdir(), "snap-corrupt-"));
+	const path = join(root, "AGENTS.md");
+	writeFileSync(path, Buffer.alloc(2 * 1024 * 1024, 7));
+	const before = takeSnapshot([path], { spillDir: join(root, "spill") });
+	const entry = [...before.values()][0];
+	assert.equal(entry.content, null);
+	writeFileSync(entry.spill, "tampered recovery data");
+	writeFileSync(path, "changed governance");
+	const diff = compareSnapshots(before, takeSnapshot([path], { hashOnly: true }));
+	assert.ok(restoreSnapshot(before, diff).includes([...before.keys()][0]));
+	if (existsSync(path)) assert.notEqual(readFileSync(path, "utf8"), "tampered recovery data");
+});
+
 test("governance paths: one list feeds the diff filter, the pathspecs and the guard", () => {
 	for (const f of GOVERNANCE_FILES) {
 		assert.equal(isGovernanceTreePath(f), true, f);

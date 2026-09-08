@@ -1,3 +1,33 @@
+# v1.2.3
+
+### Fixed
+
+- Reviewer findings survive retry selection even when the retry is malformed or discarded. Original and retry evidence reaches the gate and judges without adding a panel seat or inventing a reviewer verdict.
+- Git clean filters cannot silently change protected governance, issue data or engine control files during diff capture, including initial and paused-run preflight. Changes are restored and the run stops; an unexpected HEAD change also stops the run.
+- Approval stores the regular issue-source file without clean filters, normalizes it to LF and preserves its tracked executable bit. Commits use captured blobs and are published only after the integrity check, with hooks disabled and signing configuration respected. Linked issue sources require a manual commit.
+- Changed submodule pointers produce an explicit review pause instead of a blob-reading error. Review and commit the pointer separately before resuming; unchanged restarts spend no additional implementation budget. A binary receipt or larger text cap cannot approve a submodule.
+- Multiple marked pipeline-contract blocks are rejected, including empty marked examples. A lone marked block without recognized top-level contract fields also refuses; it cannot hide an unmarked real contract. `doctor` and `init` now pass their supplied environment to contract validation.
+- Decision-marker phrases quoted in engine-written blocker and pause history are escaped, preserving readable text without blocking unrelated issues. Genuine open decisions still prevent a real run.
+- Unset and empty numeric tuning values retain their silent defaults. Invalid non-empty values emit a warning naming the supplied value and fallback. Unsafe integers are rejected as tuning values too.
+- Git-operation snapshots spill protected files above 1 MiB to temporary recovery copies outside the working tree. Large files are hashed in bounded chunks, and corrupted recovery copies are refused.
+
+### Changed
+
+- Approving an issue records its accepted `medium`/`low` findings in `MEMORY.md` as `## Follow-ups — <id> (<date>)`, with decision-marker phrases escaped like every other engine-written history. `gate.json` lives under the gitignored `.pipeline/`, so it was not a place a follow-up survived. The pipeline still creates no tickets and never reads these entries back into a prompt; PRD R6 describes this explicitly.
+
+- Documentation clarifies all three decision markers, setup and HEAD prerequisites, map-form gates, command-source shorthand, run-lock locations and the engine's MEMORY.md exception. The audit checklist now covers review pauses, binary receipts and submodules.
+- The existing implementer trust granted by `--auto-merge` alone and Claude Code's differing role isolation are explicit. Branch merging remains unimplemented.
+- Skill runtime requirements refer to the installed Pi package's `engines.node` instead of a fixed Pi version. README consistently documents the 512 KiB text-diff default.
+- The smoke timeout check measures a hanging role directly; the integration scenario separately checks twelve reviewer timeouts and fail-closed panel handling, without treating total Git and filesystem time as role execution time. A separate 60-second ceiling bounds the complete timeout scenario, allowing margin above the previously observed 36-second Windows run.
+
+### Validation
+
+- 154 tests passed locally on Windows (Node 26.8.1, Git Bash) with the real Pi SDK and no skips, including the lone marked-contract regression, large-file recovery, corrupted recovery-copy rejection and the follow-up recording.
+- The full smoke suite passed (`smoke OK`) with a real SDK bootstrap, as did ShellCheck, the Bash syntax check and `git diff --check`. The process-tree probe returned status 124 in about 1.9 seconds with a one-second role limit and a child sleeping for 20 seconds; the complete timeout scenario finished in 23 seconds against its separate 60-second ceiling.
+- `npm pack --dry-run`: 59 files, 109.7 kB packed, 334.8 kB unpacked, version 1.2.3.
+- The counterexamples of both 1.2.2 reviews run as regressions: `tests/unit/review-fixes.test.mjs` with `tests/fixtures/review-counterexamples.mjs`.
+- No live evaluation of PRD-to-governance generation, no live Claude Code run, and no macOS or Linux execution is claimed for this release; CI covers Ubuntu 18/22 and Windows 22.
+
 # v1.2.2
 
 ### Fixed

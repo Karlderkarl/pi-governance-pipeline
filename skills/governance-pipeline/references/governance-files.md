@@ -28,7 +28,7 @@ pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.m
 
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable contract block**.
 
-The contract block holds `contract_version: 2`, `models`, `budgets`, `review`, `issues` and `gates` exactly as specified in `contract.md`. Fence it as `yaml pipeline-contract` so an example block above it cannot become the routing. `issues.source` and `gates` come from the repository inspection in govern: the dev commands you found (`package.json` scripts, `Makefile`, `pyproject.toml`, `Cargo.toml`, `go.mod`) become gates; the place issues live becomes the source. Where you cannot decide, write the marker — the pipeline refuses to start on it, which is the intended failure. The engine scans every governance file line by line for `[USER DECISION REQUIRED]` and `[NEEDS PRD CLARIFICATION]`, so write the marker only where a decision is open and never quote it in prose that explains the convention.
+The contract block holds `contract_version: 2`, `models`, `budgets`, `review`, `issues` and `gates` exactly as specified in `contract.md`. Mark exactly one fence as `yaml pipeline-contract`; multiple marked fences are an error, including example fences. `issues.source` and `gates` come from the repository inspection in govern: the dev commands you found (`package.json` scripts, `Makefile`, `pyproject.toml`, `Cargo.toml`, `go.mod`) become gates; the place issues live becomes the source. Where you cannot decide, write the marker — the pipeline refuses to start on it, which is the intended failure. The engine scans every governance file for the phrases `USER DECISION REQUIRED`, `NEEDS PRD CLARIFICATION` and the legacy `NEEDS CLARIFICATION`, with or without brackets. Write them only for open decisions; never quote them in explanatory prose. Engine-written history escapes their spaces as Markdown HTML entities so a quotation cannot become a new decision.
 
 Prohibited actions deserve care: they are the last line of defence in a harness without permission prompts. Be specific — "never force-push to main", not "be careful with git".
 
@@ -43,7 +43,7 @@ Keep a short `SYSTEM.md` at the repository root as the human-readable source of 
 
 Replacing the default prompt is a much larger step than appending. Govern writes the root file and copies it to `.pi/APPEND_SYSTEM.md` so it takes effect. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. `doctor` warns when the root file exists and the `.pi` copy does not.
 
-When any role runs through Claude Code (`--harness anthropic=claude-code`), render the same facts as `CLAUDE.md`. Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the contract still lives in `AGENTS.md`, which the pipeline reads itself. Reviewers under Claude Code run with `--safe-mode`, which skips `CLAUDE.md`.
+When any role runs through Claude Code (`--harness anthropic=claude-code`), render the same facts as `CLAUDE.md`. Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the contract still lives in `AGENTS.md`, which the pipeline reads itself. Reviewers and judges under Claude Code run with `--safe-mode`, which skips `CLAUDE.md`; research retains it.
 
 Also record here: dev commands, environment variables, and tool preferences using the harness's tool names (`read`, `write`, `edit`, `bash`, `grep`, `find`, `ls` for pi).
 
@@ -51,11 +51,13 @@ Also record here: dev commands, environment variables, and tool preferences usin
 
 ## MEMORY.md
 
-Living status. The only file that changes on nearly every run — and only the harness writes it during a run (blockers); a role that edits it loses the attempt.
+Living status. During a run only the engine may append blocker, review-pause and follow-up history; a model role that edits it loses the attempt.
 
 Sections: completed work · key decisions with dates and rationale · open blockers · next steps · drift notes.
 
 Blockers are load-bearing. An aborted issue writes its blocker here as `## Blocker — <id> (<date>)` with the unresolved review findings as prose (file and title, no line numbers) and the tail of the tool log. The state file already skips `blocked` / `done` issues; the *content* is fed back into the research and implement prompts for that issue (last `BLOCKER_HISTORY_MAX` entries, capped at `BLOCKER_HISTORY_MAX_BYTES`).
+
+An approval appends the accepted follow-up findings as `## Follow-ups — <id> (<date>)`, in the same prose form and with the same marker escaping. They are a backlog to triage by hand, not a blocker: nothing reads them back into a prompt.
 
 When history grows unwieldy, archive completed phases to `memory/completed-phases.md` and leave a pointer. Do not let `MEMORY.md` become a changelog — it is a status file, and every line should still be relevant.
 
