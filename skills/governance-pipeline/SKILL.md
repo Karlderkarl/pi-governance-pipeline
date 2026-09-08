@@ -1,6 +1,6 @@
 ---
 name: governance-pipeline
-description: Generate or audit project governance from a PRD, or set up, run and audit the issue-driven auto-develop pipeline shipped in this package. Use for these workflows, not merely because a repository contains AGENTS.md.
+description: Generate or audit project governance (SOUL.md, AGENTS.md, SYSTEM.md, MEMORY.md, the pipeline contract) from a PRD, or set up, dry-run, run and audit the issue-driven auto-develop pipeline shipped in this package (auto-develop.sh, /govern, /automate, /pipeline-audit). Use for these workflows, not merely because a repository contains AGENTS.md.
 compatibility: Requires pi, bash, git and credentials for the configured providers. The engine supports Node >=18; Pi 0.85 requires Node >=22.19.
 ---
 
@@ -16,7 +16,8 @@ Generate governance, or audit it after PRD/repository changes. Read [governance-
 
 1. Read the PRD and inspect the actual repository: stack, architecture, security/compliance needs, dependencies and lint/test/type-check commands. Report conflicts rather than choosing silently.
 2. Resolve roles, models, git conventions, budgets, gates and issue source with the human. Present the proposed changes before writing; for existing files, audit first and ask per file: overwrite, merge or skip.
-3. Write the four governance files and harness copies as specified in the references. New contracts use `yaml pipeline-contract` with `contract_version: 2`, `issues.source` and `gates`. Mark unresolved decisions with `[USER DECISION REQUIRED]` or `[NEEDS PRD CLARIFICATION]`; never invent answers. Markers intentionally prevent startup.
+3. Write the four governance files and harness copies as specified in the references. New contracts use `yaml pipeline-contract` with `contract_version: 2`, `issues.source` and `gates`. Mark unresolved decisions with `[USER DECISION REQUIRED]` or `[NEEDS PRD CLARIFICATION]`; never invent answers. A marker anywhere in governance fails `doctor` and refuses a real run; a dry-run only notes it. Do not quote the marker text elsewhere in governance.
+4. Validate before handing over: `node <package>/bin/pipeline.mjs doctor`. Before `automate`, three findings are expected and are resolved by `init`: the missing wrapper, `.pipeline/` not yet gitignored, a missing issue file; a FAIL naming an intentional marker is the intended state. Report these as such and fix every other FAIL: a contract FAIL means the block is wrong, not the project.
 
 Under `pi -p`, do not ask questions: an existing-governance audit stays read-only; authorized generation leaves markers for unresolved decisions. Governance writes require interactive confirmation or, for unattended govern, `PIPELINE_ALLOW_GOVERNANCE_WRITE=1`. The pipeline itself must never write governance.
 
@@ -33,10 +34,10 @@ Show both outputs. If `init` fails, stop and explain; contract changes go throug
 
 ## Mode: audit
 
-Follow [audit.md](references/audit.md): run `doctor` and `status`, inspect project-controlled setup, report readiness without changing anything. Consult individual invariants only for unresolved behavior questions; the engine's test suite owns their verification.
+Follow [audit.md](references/audit.md): run `doctor` and `status`, inspect project-controlled setup, report readiness without changing anything. The checklist summarises the invariants it cites; the engine's test suite owns their verification.
 
 ## Boundaries
 
 - Never let a prompt choose its model; routing comes from `AGENTS.md`.
 - Never bypass the startup gate: `--unattended`, `--auto-merge` and an external issue source are confirmed before the loop or by `--yes`, never mid-run.
-- Never edit `.pipeline/state` by hand; `governance.mjs state budget --set` is the way to raise a ceiling.
+- Never edit `.pipeline/state` by hand; `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>` is the way to raise a ceiling.

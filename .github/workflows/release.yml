@@ -93,7 +93,14 @@ jobs:
           # notes that describe a different range.
           esc="${RELEASE_TAG//./\\.}"
           if [ -f release-notes.md ] && grep -Eq '(\.\.\.|^#+ )'"$esc"'([^0-9]|$)' release-notes.md; then
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file release-notes.md
+            # Keep repository history, but publish only this version's section.
+            awk '$0 == "# " ENVIRON["RELEASE_TAG"] { active=1; next }
+                 active && /^# / { exit }
+                 active { print }' release-notes.md > "$RUNNER_TEMP/release-body.md"
+            if [ ! -s "$RUNNER_TEMP/release-body.md" ]; then
+              cp release-notes.md "$RUNNER_TEMP/release-body.md"
+            fi
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$RUNNER_TEMP/release-body.md"
           else
             gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
           fi

@@ -1,6 +1,6 @@
 // INV-17, INV-21: a failed approval commit is an error, also for a split parent.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runPipeline } from "../../lib/loop/run.mjs";
@@ -18,10 +18,9 @@ else if (prompt.startsWith("Decide this attempt")) console.log('{"decision":"app
 else console.log("notes");
 `);
 	if (rejectCommit) {
-		const hooks = join(root, ".git", "failing-hooks");
-		mkdirSync(hooks);
-		writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho 'test: commit refused' >&2\nexit 1\n", { mode: 0o755 });
-		checkedGit(root, ["config", "core.hooksPath", hooks]);
+		// Signing fails inside git commit; pipeline commits intentionally skip hooks.
+		checkedGit(root, ["config", "commit.gpgsign", "true"]);
+		checkedGit(root, ["config", "gpg.program", join(root, ".git", "missing-gpg")]);
 	}
 	return { root, stub };
 }
@@ -51,7 +50,7 @@ test("a failed commit on the only selected issue returns non-zero and preserves 
 	const { rc, output } = await run(project, { onlyIssue: "one" });
 	assert.equal(rc, 1, output);
 	assert.match(output, /approved work of one could not be committed/);
-	assert.match(output, /test: commit refused/);
+	assert.match(output, /missing-gpg/);
 	assert.equal(checkedGit(project.root, ["rev-parse", "HEAD"]), head);
 	assert.equal(readFileSync(join(project.root, "reviewed.txt"), "utf8"), "approved work\n");
 	assert.match(readFileSync(join(project.root, "tasks.md"), "utf8"), /- \[x\] one:/);

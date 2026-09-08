@@ -1,6 +1,6 @@
 # Operations
 
-Flags, variables, layout, logging and the threat model of the pipeline as it ships in the package. What the loop guarantees is in `invariants.md`; what governance must contain is in `contract.md`.
+Flags, variables, layout, logging and the threat model of the pipeline as it ships in the package. What governance must contain is in `contract.md`; the invariants the loop enforces are summarised in `audit.md` and pinned by the engine's test suite.
 
 ## Contents
 
@@ -22,7 +22,7 @@ Flags, variables, layout, logging and the threat model of the pipeline as it shi
 |---|---|
 | `run [flags]` | Run every open issue of the issue source |
 | `init [--harness <spec>] [--local] [--force]` | Validate options and contract first, write the wrapper (pinned to the package version, executable bit recorded in the index, line endings pinned to LF in `.gitattributes`), add `.pipeline/` to `.gitignore`, create a missing issue file and its parent directories |
-| `doctor [--harness <spec>]` | PASS / WARN / FAIL per project check; exit 1 on FAIL |
+| `doctor [--harness <spec>]` | PASS / WARN / FAIL per project check, including a decision marker in any governance file; exit 1 on FAIL |
 | `status` | Counters, tree budget, per-issue state |
 
 Two 1.0.x facades stay callable for operators and the parity suite: `lib/governance.mjs` (`config`, `model`, `models`, `state …`) and `lib/gate.mjs`.
@@ -36,7 +36,7 @@ Two 1.0.x facades stay callable for operators and the parity suite: `lib/governa
 | `--unattended` | off | Privileged steps allowed in child processes; confirmed once before the loop |
 | `--auto-merge` | off | Adaptation point: parsed and confirmed, not implemented |
 | `--yes`, `-y` | off | Answers every startup gate yes; required on a non-interactive stdin |
-| `--max-runs <n>` | off | Invocation cap across issues. Not a PRD field; `max_runs_per_tree` remains per tree |
+| `--max-runs <n>` | off | Invocation cap across issues; a planned stop, so a split parent keeps `split` and the next run resumes at its open children. Not a PRD field; `max_runs_per_tree` remains per tree |
 | `--harness <spec>` | `pi` | Harness per provider, see below |
 
 ## Environment
@@ -49,10 +49,11 @@ Run-time knobs. The contract carries routing, budgets, gates and the issue sourc
 | `ISSUE_SOURCE` | contract, else `tasks.md` | A file, or `!command` whose stdout lists `id: title` lines; overrides the contract for the run |
 | `LINT_CMD`, `TEST_CMD` | — | When either is set, they replace the contract's `gates` list for the run |
 | `COMMIT_APPROVED` | `1` | `0` leaves approved work uncommitted and stops the run after the first approval |
-| `DIFF_MAX_BYTES` | `65536` | Cap on the review diff; truncation is per file, omitted paths are named |
+| `DIFF_MAX_BYTES` | `524288` | Per-file shares bound the text diff. Incomplete coverage pauses the issue; unchanged restarts spend no additional implementation budget. Reduce the change or raise this cap before resuming. Dry-run renders the preview |
+| `BINARY_REVIEW_FILE` | — | Operator-owned JSON receipt outside the working tree, loaded before model work. Human approval binds repository-relative binary paths to SHA-256 hashes of their Git blob contents; see Binary review |
 | `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON in the controller and master prompts |
 | `EXCLUSIONS_MAX_LINES` | `200` | Cap on tool output re-entering the implement prompt; gate findings are never displaced |
-| `MIN_REVIEWERS` | `2` | Panel floor; two consecutive attempts below it abort as a configuration error. A value that is not an integer ≥ 1 is fatal |
+| `MIN_REVIEWERS` | `2` | Panel floor, integer 1–3; other values refuse before model work. Two consecutive attempts below it abort as a configuration error |
 | `ROLE_TIMEOUT_SECONDS` | `0` | Cap around each role; a timeout ends the whole process tree, empties the answer and logs status 124 |
 | `GATE_TIMEOUT_SECONDS` | `ROLE_TIMEOUT_SECONDS` | Cap around each gate and around a `!command` issue source; a timeout counts as a failed gate and feeds the output so far back |
 | `PROMPT_KEEP_RUNS` | `3` | Distinct run ids kept under `.pipeline/prompts/` |
@@ -83,7 +84,7 @@ Isolation per role class:
 
 Every pi role gets `-p --no-session`; every Claude Code role `-p --output-format json`. The prompt goes in on stdin. Pi reviewers, research and judges additionally receive `--system-prompt "" --append-system-prompt ""`, which selects the built-in base prompt without discovering global or project system-prompt files. This preserves authentication and model configuration. Research and judges still load context files; reviewers disable those with `-nc`. The implementer is the only class that can receive `--approve`. A role whose process exits non-zero is reported with the first line of its stderr, and the full text is kept as `<answer>.stderr` under the issue's work directory; two implementation attempts in a row that exit non-zero with an unchanged tree end the issue as a configuration error. The Claude Code adapter is checked against `claude --help` and a stub; it has no live verification in this release.
 
-**Commit integrity.** An approval commits only the reviewed paths and the issue source; unrelated staged entries remain staged. If either implementer changes HEAD, the issue is blocked and the whole run stops before gates or review, including when some edits remain uncommitted. The log records `head-moved`. Inspect the unexpected commits and restore a reviewed baseline before starting another run; the pipeline preserves both the commits and remaining edits for that inspection.
+**Commit integrity.** An approval commits the exact Git-normalized blobs captured for review, plus the issue source; unrelated staged entries remain staged. A scratch index applies clean filters during capture, and its blob IDs are retained in parent memory for approval. Commit uses those IDs without restaging implementation from disk; external diffs and textconv are disabled in the review patch. If either implementer changes HEAD, the issue is blocked and the whole run stops before gates or review, including when some edits remain uncommitted. The log records `head-moved`. Inspect the unexpected commits and restore a reviewed baseline before starting another run; the pipeline preserves both the commits and remaining edits for that inspection.
 
 A failed approval commit exits non-zero even for the last issue or a split-parent closing commit. Approval and checkbox changes are retained: inspect git's error and commit the approved paths manually before continuing. No further issue starts. A halt after a split child leaves its parent open; after restoring the baseline, rerun the parent to close it or resume any remaining children. `COMMIT_APPROVED=0` is an intentional stop, not a commit error, and can return success when no further issue was selected.
 
@@ -106,7 +107,7 @@ tasks.md                     # or the issue source declared in the contract
 
 ## State file
 
-One per root issue. The single source of truth for counters — no model ever holds them. Written after every mutation, so a crashed run resumes with its counters.
+One per root issue. The single source of truth for counters — no model ever holds them. Each attempt is reserved before launching the implementer. Writes use a flushed temporary file and atomic rename. Invalid JSON or state schema makes `doctor`, `status` (including `--json`) and a real run fail; repair from known state instead of resetting the budget.
 
 ```json
 {
@@ -116,12 +117,57 @@ One per root issue. The single source of truth for counters — no model ever ho
   "depth": 1,
   "issues": {
     "issue-42":   { "attempts_controller": 3, "attempts_master": 0, "status": "split", "children": ["issue-42.1", "issue-42.2"] },
-    "issue-42.1": { "attempts_controller": 1, "attempts_master": 0, "status": "open", "parent": "issue-42", "depth": 1 }
+    "issue-42.1": { "attempts_controller": 1, "attempts_master": 0, "status": "open", "parent": "issue-42", "depth": 1 },
+    "issue-42.2": { "attempts_controller": 3, "attempts_master": 0, "status": "open", "parent": "issue-42", "depth": 1 }
   }
 }
 ```
 
-`max_runs_per_tree` is frozen at tree creation; editing the contract later does not change an existing tree. Raise it with `node lib/governance.mjs state budget .pipeline <root_id> --set <n>`. Children of a split live in the parent's file and consume the same budget.
+`max_runs_per_tree` is frozen at tree creation; editing the contract later does not change an existing tree. Raise it from the project root with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`; the project holds only the wrapper, the library lives in the installed package. Children of a split live in the parent's file and consume the same budget.
+
+Only one pipeline may own a physical working tree. A competing run or state CLI mutation fails with the `pipeline-run.lock` path in the resolved per-worktree Git directory, independent of caller TEMP/TMPDIR. `doctor` reports an existing lock. A crashed process leaves its lock in place: stop its surviving model processes and inspect the tree before manually removing that named lock. It is deliberately not auto-reclaimed. All descendants, including a grandchild selected by `--issue`, retain the original tree budget; invocation caps propagate a pause through every split ancestor.
+
+Each issue also persists the mapped models that contributed to its current diff. `no_self_review` excludes all those contributors across escalation and resume, ignoring thinking-level suffixes. A successful `take_over` stash clears that history; a failed stash keeps it. For pre-existing state without this history, the engine conservatively uses the current routing for roles with recorded attempts; historical model names cannot be reconstructed after routing changes.
+
+`init` refuses an explicit harness/local configuration change that would leave the existing wrapper unchanged. Apply the requested replacement with `--force`. Issue IDs must be unique after normalization, including closed entries; completion and child creation compare the entire ID before the colon.
+
+## Binary review
+
+Binary files do not receive an automatic content approval from the text reviewers.
+A run pauses with the paths needing human review and writes two artifacts under
+`.pipeline/work/<issue>/`:
+
+- `diff.patch.entries.json` maps each path to its exact Git blob ID and mode.
+- `diff.patch.binary.json` is a receipt template with `approved: false` and SHA-256 hashes.
+
+Inspect the exact binary content before approving it. Extract a listed blob with
+`git cat-file blob <oid> > /outside/review/asset.bin` in Bash, and open it with the
+appropriate image/PDF/font/fixture viewer or validation tool. On Windows use Git
+Bash for this binary redirection. A hash identifies bytes; it does not perform
+their review. Inspect deletions and mode changes in the accompanying patch too.
+
+After reviewing the files, copy the receipt template to an operator-owned path
+**outside the working tree**. Set `approved` to `true` and retain only paths whose
+contents you approved. For example:
+
+```json
+{"version":1,"approved":true,"files":{"assets/logo.png":"<64 lowercase SHA-256 hex characters from the template>"}}
+```
+
+Resume with `BINARY_REVIEW_FILE=/outside/review/approved.json ./auto-develop.sh --issue <id>`.
+The engine loads this receipt before model work and requires an exact hash match.
+Changed binary bytes need another human review; `--yes` and `--unattended` do not
+grant binary approval. The file is also included in the control-integrity check.
+For a deleted binary the receipt hash describes the empty resulting content;
+review the old blob and deletion before acknowledging it.
+
+A coverage pause is stored as `paused`, with a reason shown by `status` and appended
+to MEMORY.md. Repeated starts check the retained diff before any model invocation.
+They spend no further implementation budget while coverage remains incomplete.
+Once the cap or receipt resolves the pause, normal implementation/gates/review
+resume; that new implementation counts as another attempt. Already started
+attempts are never refunded. The run exits 1 on a coverage pause and does not
+start the next issue.
 
 ## Logging
 
@@ -129,15 +175,21 @@ One JSONL event per step: `ts`, `issue`, `role`, `model`, `status`, `prompt` (pa
 
 ## Safety
 
-pi has no permission dialog and `pi -p` has no UI. The package handles that in three places:
+pi has no permission dialog and `pi -p` has no UI. The package uses these checks:
 
-- **The startup gate.** `--unattended` and `--auto-merge` are confirmed before the loop, on a TTY or by `--yes`. An external issue source (a `!command`, or `issues.source.command` without `trust: internal`) is confirmed the same way on a real run: its text feeds every prompt.
+- **The startup gate.** `--unattended` and `--auto-merge` are confirmed before the loop, on a TTY or by `--yes`. An external issue source (a `!command`, or `issues.source.command` without `trust: internal`) is confirmed the same way on a real run: its text feeds every prompt. During preflight, before model work, a decision marker in any governance file (`SOUL.md`, `AGENTS.md`, `MEMORY.md`, `SYSTEM.md`, `CLAUDE.md`, `.pi/APPEND_SYSTEM.md`, relocated files included) refuses a real run with file and line; a dry-run notes it.
 - **Governance integrity.** Before every tool-bearing role the protected paths (`SOUL.md`, `AGENTS.md`, `AGENTS.override.md`, `SYSTEM.md`, `.pi/**`, `CLAUDE.md`, `MEMORY.md`, upper-case spellings, plus the issue source and the wrapper) are snapshotted; afterwards they are compared by hash. The same set is copied out and written back around every stash — `take_over`, `split`, and a block, which stashes the rejected tree so the next issue starts from HEAD. A role that changed them loses the attempt, the files come back from the snapshot (kept in memory up to 1 MB per file, otherwise as a copy under `.pipeline/work/<issue>/gov-snapshot/`), the run log records `governance-modified`. This looks at files, not at commands: `eval`, `bash -c` and scripts are covered. A large package checkout under `.pi/` costs I/O per role, not heap.
 - **pipeline-guard.** The interactive counterpart: an agent that reaches for `git push --force`, `sudo`, `rm -rf` or a governance write in a session is asked, and blocked without a UI. Its patterns live in `lib/guard/patterns.mjs`; the governance names in `lib/integrity/governance-paths.mjs` — the one list that also feeds the diff filter and the stash protection. The guard is a speed bump, not a sandbox: `rm -rf "$HOME"` behind a variable, runtime-constructed commands and `eval` walk past a regex. Destructive-command gating in unattended child processes remains the guard's job.
+- **Link-safe recovery.** Snapshots record directory links and symlinks themselves without descending into their targets. Restoration removes newly introduced links, preserves their target data, restores original object types, and verifies the resulting snapshot. It never recursively deletes a new target tree.
+- **Engine control integrity.** State, Git configuration, default and configured hooks, and linked-worktree metadata are snapshotted in parent memory around roles, gates and command issue-source reads, including split resumption. A modification or deletion restores the saved bytes and stops the run before approval. The guard refuses ordinary write/edit calls into `.git` and `.pipeline/state`. Approval staging and commits disable all Git hooks, including pre-existing ones; deterministic checks belong in contract gates. Relocated governance is excluded from both review and commit.
+
+These checks run at process boundaries. They do not isolate a hostile process with the same OS permissions, undo external side effects, or recover state if that process destroys the state and kills the parent before its integrity check. Use OS isolation for that threat model. A successful test proves the enforced paths, not that a model understood every reviewed line.
 
 **Untrusted input.** Multi-model review covers correlated blind spots, not manipulation. Three processes, at least two providers, no shared verdict and `no_self_review` defend against every reviewer missing the same thing; they do not defend against the object under review talking to the panel. Issue text (from `gh`, Jira) and the diff (written by a model) are framed in every prompt as content to judge, never as instructions. That is a mitigation, not a boundary. Run an unattended loop over foreign-fed issues in a container.
 
-**Gates through a shell.** `gates[].run`, `LINT_CMD`, `TEST_CMD` and `!command` sources run through bash (or `PIPELINE_SHELL`). Whoever writes governance or the run's environment has code execution — governance is guard-protected, committed and reviewable; the environment is the operator's.
+**Gates through a shell.** `gates[].run`, `LINT_CMD`, `TEST_CMD` and `!command` sources run through bash (or `PIPELINE_SHELL`). Whoever writes governance or the run's environment has code execution — governance is guard-protected, committed and reviewable; the environment is the operator's. The implementer, however, writes the scripts a gate command calls (`npm test` runs whatever `package.json` names), so a gate runs model-written code with the operator's rights and no guard. The engine therefore repeats the governance snapshot and the HEAD check after the gates: a gate that edits governance costs the attempt and is reverted, a gate that commits blocks the issue and stops the run. What a gate does outside the repository is not checked; that is the case for a container.
+
+**Failed processes.** A reviewer or master whose process exits non-zero or times out has not completed its review, whatever it printed. Its approval is discarded; a blocking finding it wrote is kept. A refused `git stash` after a block or before a split halts the run with exit 1, because the next issue would otherwise review and commit the rejected tree; the tree stays in place for inspection.
 
 ## Trust and project resources
 

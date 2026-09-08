@@ -140,3 +140,24 @@ test("an issue source outside the repository is a warning", () => {
 	const inside = readConfig(agents(`contract_version: 2\n${PANEL}\nissues:\n  source: docs/tasks.md\ngates: []`));
 	assert.ok(!validate(inside.config, inside).warnings.some((w) => w.includes("outside the repository")));
 });
+
+// INV-01, INV-09: a known field with the wrong type is an error, never a
+// silent default or a constraint that the validator counts as on and the
+// loop as off.
+test("wrong types in known fields are contract errors, not silent defaults", () => {
+	const cases = [
+		["models:\n  implement: wrong-scalar\n  implement_master: { provider: b, model: y }", /models\.implement must be a map/],
+		[`${PANEL}\n  constraints: { no_self_review: "true" }`, /no_self_review must be true or false, unquoted; got "true"/],
+		["models:\n  review: nope", /models\.review must be a map of reviewer roles/],
+		["models:\n  review:\n    security: gemini", /models\.review\.security must be a map/],
+		["models: just-a-string", /models must be a map of roles/],
+		["budgets: 3", /budgets must be a map/],
+	];
+	for (const [body, expected] of cases) {
+		const source = readConfig(agents(body));
+		const { errors } = validate(source.config, source);
+		assert.ok(errors.some((e) => expected.test(e)), `${body}\n-> ${errors.join("\n")}`);
+	}
+	const ok = readConfig(agents(`${PANEL}\n  constraints: { no_self_review: true }`));
+	assert.ok(!validate(ok.config, ok).errors.some((e) => /must be/.test(e)));
+});

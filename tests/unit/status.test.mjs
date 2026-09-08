@@ -15,7 +15,7 @@ test("readAllStates reads every tree and reports an unreadable file instead of t
 	writeFileSync(join(dir, "state", "broken.json"), "{not json");
 	const states = readAllStates(dir);
 	assert.equal(states["issue-1"].runs_used, 2);
-	assert.deepEqual(states.broken, { error: "unreadable state file" });
+	assert.match(states.broken.error, /unreadable state file:.*broken\.json/);
 	assert.deepEqual(readAllStates(join(dir, "nowhere")), {});
 });
 

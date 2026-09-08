@@ -81,7 +81,7 @@ The harness (pi, Claude Code) is **not** a contract field: governance is harness
 
 `max_attempts_*` are per issue and start at zero for every child of a split. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth` caps how deep a split may go (default 1; above 1 needs `PIPELINE_ALLOW_DEEP_SPLIT=1`). Every budget field must be an integer: `max_attempts_*` and `max_runs_per_tree` ≥ 1; `max_split_depth` ≥ 0.
 
-`state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` do not change an existing tree. To raise the ceiling for a running tree: `node lib/governance.mjs state budget .pipeline <root_id> --set <n>`.
+`state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` do not change an existing tree. To raise the ceiling for a running tree: `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`, from the project root.
 
 Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly six model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
 
@@ -127,6 +127,7 @@ Validation runs in `init`, `doctor`, at the start of every run, and in the `gove
 
 - `contract_version` other than 1 or 2
 - a decision marker in any field
+- a known field with the wrong type: a role that is a scalar instead of `{ provider, model }`, `models`, `models.review`, `budgets` or `review` that is not a map, `no_self_review` that is not an unquoted `true` / `false`. Explicit `null` and empty YAML values in these fields are errors; only a missing key receives the default.
 - a mapped role without `model` (`implement: { provider: a }` would otherwise run the default model in silence)
 - `implement_master` identical to `implement` (compared without `thinking`)
 - exactly one provider across mapped `review.*` roles; exactly one mapped `review.*` role ("only one models.review.* role is mapped"); a mapped `review.*` role without `provider`
@@ -136,5 +137,7 @@ Validation runs in `init`, `doctor`, at the start of every run, and in the `gove
 - an explicit `constraints.no_self_review: true` with fewer than two mapped `review.*` roles
 - v2 without `issues.source` or without `gates`; `gates` entries without a valid `name` or `run`, or with a duplicate `name`; an `issues.source` that is neither a path nor a `{ command }` map, or a `trust` other than `external` / `internal`
 - a file that looks like a contract when no fenced YAML block parsed
+
+Contract validation sees only the YAML block. A marker in the prose of `AGENTS.md`, in `SOUL.md`, `MEMORY.md` or a harness copy is caught separately: `doctor` reports it as FAIL with file and line, a real run refuses to start, a dry-run notes it.
 
 It warns (never refuses) on unknown keys at every map, on `master_review` equal to `implement_master`, on a `review.*` model equal to an implementer under `no_self_review`, on a panel that would shrink below two reviewers on the escalated path, on overlapping severity lists (blocking wins), on a `models:` block that maps no role, on an `issues.source` path outside the repository (it would not be committed with approved work), and on `gates: []`.

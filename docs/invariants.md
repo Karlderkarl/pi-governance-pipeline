@@ -1,9 +1,9 @@
 # Invariants
 
-The rules the pipeline enforces, in one place. Each entry names why it exists and the test that pins it: `smoke:` is a scenario label in `tests/smoke.sh` (the parity suite, 1.0.x behaviour and 1.2.0 additions), `unit:` a file under `tests/unit/`. `tests/unit/traceability.test.mjs` checks that every invariant names a test that exists and that every unit test names an invariant. A change that breaks one of these is wrong even if it runs.
+Maintainer documentation, repository only: the installed skill carries a one-line summary of the invariants its audit checklist cites (`skills/governance-pipeline/references/audit.md`). The rules the pipeline enforces, in one place. Each entry names why it exists and the test that pins it: `smoke:` is a scenario label in `tests/smoke.sh` (the parity suite, 1.0.x behaviour and 1.2.0 additions), `unit:` a file under `tests/unit/`. `tests/unit/traceability.test.mjs` checks that every invariant names a test that exists and that every unit test names an invariant. A change that breaks one of these is wrong even if it runs.
 
 ### INV-01 Routing comes from governance
-Every model invocation reads its model from the `models:` block in `AGENTS.md`; the engine holds no model name. Changing the mapping changes the routing; nothing else is touched. A role that is written down without a `model` is a contract error, not a silent default.
+Every model invocation reads its model from the `models:` block in `AGENTS.md`; the engine holds no model name. Changing the mapping changes the routing; nothing else is touched. A role that is written down without a `model` is a contract error, not a silent default, and so is a known field with the wrong type (`implement: sonnet`, `no_self_review: "true"`): a value that exists but is unusable never counts as absent.
 **Why:** cost differentiation per role (PRD §4.1, AK1) only works if the mapping is the single lever.
 **Test:** smoke: P3.2 role toolset flags | unit: contract.test.mjs
 
@@ -13,14 +13,14 @@ Each reviewer is its own harness process with a fresh context. No reviewer promp
 **Test:** smoke: 1.0.14 R1: no governance/pipeline path in a reviewer prompt | unit: prompts.test.mjs
 
 ### INV-03 Counters live in the state file
-Attempt counters and the tree budget are read from and written to `.pipeline/state/<root_id>.json` only. A model is told at most "N attempts left".
+Attempt counters and the tree budget are read from and written to `.pipeline/state/<root_id>.json` only. A model is told at most "N attempts left". The parent process snapshots state in memory around every role and gate; changed or deleted state is restored and the run stops. Malformed JSON or schema fails `doctor`, `status` and a real run.
 **Why:** a model forgets or invents counters (PRD R10).
-**Test:** smoke: e2e: resume from existing state file | smoke: state store
+**Test:** smoke: e2e: resume from existing state file | smoke: state store | unit: review-findings.test.mjs | unit: review-boundaries.test.mjs
 
 ### INV-04 The budget check precedes every attempt
-Before any implementation attempt the tree budget is checked; exhaustion blocks the issue and writes the blocker. `runs_used` counts every implementation attempt, whoever implemented, including attempts that then fail a gate.
+Before any implementation attempt the tree budget is checked and the attempt is reserved with an atomic, flushed state write; exhaustion blocks the issue and writes the blocker. `runs_used` counts every started or reserved implementation attempt, whoever implemented, including attempts that then fail a gate or crash. A lock per physical working tree excludes concurrent API/CLI runs and state CLI mutations. The lock lives in the per-worktree Git directory, independent of TEMP/TMPDIR, survives cleanup and is never stolen automatically. An unchanged coverage pause is checked before another model starts; a started attempt is never refunded.
 **Why:** a resource limit checked after the spend is not a limit (PRD R11).
-**Test:** smoke: P1.1 config abort ~17 calls, not 55 | smoke: e2e: exclusions cap
+**Test:** smoke: P1.1 config abort ~17 calls, not 55 | smoke: e2e: exclusions cap | unit: review-boundaries.test.mjs | unit: release-122.test.mjs
 
 ### INV-05 Deterministic gates run before any review, and they come from governance
 After every implementation the contract's `gates` run in order; a failure feeds its output back and costs the attempt without a review cycle. `LINT_CMD` / `TEST_CMD` replace the list for one run. No gate at all is a loud warning at start and `"gates":"none"` in every log event; in a v2 contract it has to be written down as `gates: []`. Every gate, and a `!command` issue source, is capped by `GATE_TIMEOUT_SECONDS` (default: the role cap); a timeout counts as a failed gate, and the head and the tail of its output are fed back.
@@ -28,24 +28,25 @@ After every implementation the contract's `gates` run in order; a failure feeds 
 **Test:** smoke: 1.2.0 contract v2: gates from AGENTS.md | smoke: 1.0.14 R3: an unadapted script says it has no gate | smoke: e2e: lint feedback | smoke: 1.2.0 gate timeout | unit: text.test.mjs
 
 ### INV-06 The master decides on every attempt, fail-closed, strictest-wins, never over a blocking gate
-The master review runs on every attempt and sees the original reviewer JSON, not only the controller's summary. Its output is parsed fail-closed (unparseable is reject; the decision word is trimmed and case-folded like a reviewer verdict); among several parseable decisions the strictest wins (`take_over` > `reject` > `approve`); the schema echo is never a candidate; `split` is accepted only as the sole, well-formed decision. `approve` over a blocking gate is not an approval.
+The master review runs on every attempt and sees the original reviewer JSON, not only the controller's summary. Its output is parsed fail-closed (unparseable is reject; the decision word is trimmed and case-folded like a reviewer verdict); among several parseable decisions the strictest wins (`take_over` > `reject` > `approve`); the schema echo is never a candidate; `split` is accepted only as the sole, well-formed decision. `approve` over a blocking gate is not an approval. A master whose process exited non-zero or timed out did not decide: its `approve` or `split` is treated as `reject`; a `reject` or `take_over` it wrote stands.
 **Why:** the controller is a weak model and may miscount; the diff sits inside the master's prompt, so a fragment appended after the real object must never upgrade the verdict (PRD R7, R8).
-**Test:** smoke: 1.0.14 R4: master verdict takes the strictest, not the last | smoke: e2e: reviewer floor | unit: master-decision.test.mjs
+**Test:** smoke: 1.0.14 R4: master verdict takes the strictest, not the last | smoke: e2e: reviewer floor | unit: master-decision.test.mjs | unit: process-status.test.mjs
 
 ### INV-07 An abort is never silent
 When the master budget is exhausted, the panel is broken, or the tree budget is gone, the issue is marked `blocked` under its **tree root**, the blocker is appended to `MEMORY.md` with the unresolved findings as prose (no line numbers) and the tail of the tool log, and the run exits non-zero naming the issue. A harness process that exits non-zero with nothing on stdout is reported with the first line of its stderr, the text is kept next to its answer (`<answer>.stderr`), and two such implementation attempts in a row are a configuration error, not six empty-diff retries. Lines of a blocker that start with `#` are escaped so the entry stays one entry for the history.
 **Why:** PRD R14; a blocked child must not open a state file with a budget of its own; a missing API key must read as a missing API key, not as an implementer that wrote nothing.
 **Test:** smoke: F6: the blocker carries the findings, and history is byte-capped | smoke: e2e: MEMORY.md must not unstick a later empty issue | smoke: 1.2.0 harness failure is named | unit: blocker.test.mjs
 
-### INV-08 The startup gate is the only place a human intervenes
-`--unattended` and `--auto-merge` are confirmed before the loop, on a TTY or by `--yes`, never mid-run. Only implementers receive `--approve` (pi) or `bypassPermissions` (Claude Code), and only after that gate; reviewers, research and judges never. Trust is derived from the confirmed flag, not from the environment: an inherited `PIPELINE_UNATTENDED=1` is dropped from the child environment with a warning.
+### INV-08 Startup confirmations never interrupt a running loop
+`--unattended` and `--auto-merge` are confirmed before the loop, on a TTY or by `--yes`, never mid-run. Human binary review is performed outside the loop and supplied as a receipt on the next startup. Only implementers receive `--approve` (pi) or `bypassPermissions` (Claude Code), and only after that gate; reviewers, research and judges never. Trust is derived from the confirmed flag, not from the environment: an inherited `PIPELINE_UNATTENDED=1` is dropped from the child environment with a warning.
 **Why:** pi has no permission dialog and `pi -p` has no UI (PRD R12, R13); a variable exported to quiet the guard in a session must not turn a plain run into a trusted one.
 **Test:** smoke: 1.0.14 R2: reviewers never receive --approve | smoke: 1.2.0 trust comes from the gate, not the environment | unit: harness.test.mjs
 
 ### INV-09 Escalation changes the model, and reviewers span two providers
 `implement_master` must differ from `implement` (compared without thinking). Mapped reviewers span at least two providers, and a single mapped reviewer is refused as a panel of one. An explicit `no_self_review: true` with fewer than two mapped reviewers is a contract error.
+The state records every mapped contributor to the current diff. All are excluded from review across automatic escalation and resume. Only a successful fresh-start stash clears the contributor set.
 **Why:** a different blind spot is the point of escalating, and three prompts against one model share its blind spots (PRD R2, R3).
-**Test:** smoke: contract: refused | smoke: F13: one mapped reviewer names the real problem | unit: contract.test.mjs
+**Test:** smoke: contract: refused | smoke: F13: one mapped reviewer names the real problem | unit: contract.test.mjs | unit: review-findings.test.mjs
 
 ### INV-10 A resumed run restores its counters
 Per-issue attempt counters and `runs_used` come back from the state file; a crashed run never restarts at zero. `max_runs_per_tree` is frozen at tree creation; `state budget --set` is the only way to move it.
@@ -58,54 +59,58 @@ Per-issue attempt counters and `runs_used` come back from the state file; a cras
 **Test:** smoke: auto-develop.sh | smoke: no git: fail at start, do not burn the budget
 
 ### INV-12 An empty diff is a rejected attempt
-When the working tree does not differ from HEAD after an implementation, the attempt is rejected with the reason fed back; nothing is reviewed and nothing is marked done. If an implementer moves HEAD, the issue is blocked and the entire run stops before gates or review, even when uncommitted changes remain. Commits and remaining work are preserved for inspection; the operator must restore a reviewed baseline before resuming.
+When the working tree does not differ from HEAD after an implementation, the attempt is rejected with the reason fed back; nothing is reviewed and nothing is marked done. If an implementer or a gate moves HEAD, the issue is blocked and the entire run stops before review, even when uncommitted changes remain. Commits and remaining work are preserved for inspection; the operator must restore a reviewed baseline before resuming.
 **Why:** "nothing to find" is not "no findings".
-**Test:** smoke: e2e: empty diff is fail-closed | unit: head-integrity.test.mjs
+**Test:** smoke: e2e: empty diff is fail-closed | unit: head-integrity.test.mjs | unit: gate-integrity.test.mjs
 
 ### INV-13 reject repairs in place; take_over starts fresh
-A reject keeps the working tree. A take_over stashes it (`git stash -u`) after copying governance, `.pi/`, the issue source and the wrapper out and writing them back, deletes the cached research, and forces the master path; a refused stash is reported on stderr. A block stashes the rejected tree the same way (`pipeline: blocked <id>-<run>`), so the next issue starts from HEAD instead of reviewing, and committing, code the master rejected.
+A reject keeps the working tree. A take_over stashes it (`git stash -u`) after copying governance, `.pi/`, the issue source and the wrapper out and writing them back, deletes the cached research, and forces the master path; a refused stash is reported on stderr. A block stashes the rejected tree the same way (`pipeline: blocked <id>-<run>`), so the next issue starts from HEAD instead of reviewing, and committing, code the master rejected. When that stash, or the one before a split, is refused, the run halts with exit 1 and names the issues it did not start; only take_over continues on a refused stash, with the warning.
 **Why:** inheriting the broken diff inherits the reasoning that failed; inheriting a missing SOUL.md would review without standards (PRD R9); a blocked issue's tree must not become the next issue's diff.
-**Test:** smoke: e2e: take_over stashes the rejected tree | smoke: take_over must not stash the governance away | smoke: P3.4 take_over regenerates research | smoke: F7: no initial commit refuses a real run, notes on dry-run | smoke: 1.2.0 blocked issue leaves a clean tree
+**Test:** smoke: e2e: take_over stashes the rejected tree | smoke: take_over must not stash the governance away | smoke: P3.4 take_over regenerates research | smoke: F7: no initial commit refuses a real run, notes on dry-run | smoke: 1.2.0 blocked issue leaves a clean tree | unit: stash-halt.test.mjs
 
 ### INV-14 Governance and harness never enter the review diff
 The review diff excludes governance files (including `AGENTS.override.md` and the upper-case spellings), `.pipeline/`, `.pi/`, the issue source and the wrapper, on both paths: the untracked filter and the git pathspecs. One list (`lib/integrity/governance-paths.mjs`) feeds the diff filter, the stash protection, the integrity snapshot and the guard.
+Governance relocated with `AGENTS_FILE`, `SOUL_FILE` or `MEMORY_FILE` is excluded at its actual repository path as well.
 **Why:** a blocker note in MEMORY.md must not look like an implementation, and a fourth copy of the list is how `AGENTS.override.md` went missing from three of them.
 **Test:** smoke: 1.0.14 R1: no governance/pipeline path in a reviewer prompt | smoke: F5: AGENTS.override.md and the harness stay out of the review diff | unit: snapshot.test.mjs
 
 ### INV-15 Diff truncation is per file, with a manifest
-Untracked files come first (TDD writes new tests), every file gets a share of `DIFF_MAX_BYTES`, truncated and omitted paths are named in a manifest at the end of the diff, non-ASCII paths reach the reviewers verbatim, and a manifest without diff bytes is an empty diff.
+Untracked files come first (TDD writes new tests), every file gets a share of `DIFF_MAX_BYTES`, truncated and omitted paths are named in a manifest at the end of the diff, non-ASCII paths reach the reviewers verbatim, and a manifest without diff bytes is an empty diff. A real run pauses before review if any content is truncated or omitted; no approval or commit is allowed. The reason persists in state and MEMORY.md. Unchanged restarts perform a coverage preflight without further model calls. The text default is 512 KiB. Binary content needs an explicit human receipt outside the working tree, matched by SHA-256 against the exact normalized blob; the template alone never grants approval. Dry-run still renders the bounded preview.
 **Why:** the reviewer prompt must say what was not judged; silence reads as "reviewed and clean".
-**Test:** smoke: capture_diff cap | smoke: P3.1 omitted paths named in the reviewer prompt | smoke: non-ASCII paths must reach the reviewers
+**Test:** smoke: capture_diff cap | smoke: P3.1 omitted paths named in the reviewer prompt | smoke: non-ASCII paths must reach the reviewers | unit: review-findings.test.mjs | unit: review-boundaries.test.mjs | unit: release-122.test.mjs
 
 ### INV-16 A panel below the floor blocks, and two short panels are a configuration error
-The gate blocks when fewer than `MIN_REVIEWERS` reviewers produced usable output; two consecutive attempts below the floor abort the issue as a configuration error before the controller and master of the second attempt run.
+The gate blocks when fewer than `MIN_REVIEWERS` reviewers produced usable output. A reviewer whose process exited non-zero or timed out is always unavailable; its blocking findings are preserved separately as evidence. Exact membership in the configured severity lists decides what blocks. Malformed finding entries never become an empty valid review: valid evidence is retained, but the response cannot fill a panel seat. Two consecutive attempts below the floor abort the issue as a configuration error before the controller and master of the second attempt run. A floor above three is refused before any model work.
 **Why:** one opinion is not a review panel, and a broken panel is not a quality signal worth a tree budget.
-**Test:** smoke: e2e: reviewer floor | smoke: P1.1 config abort ~17 calls, not 55 | unit: gate.test.mjs
+**Test:** smoke: e2e: reviewer floor | smoke: P1.1 config abort ~17 calls, not 55 | unit: gate.test.mjs | unit: process-status.test.mjs | unit: review-findings.test.mjs
 
 ### INV-17 Approved work is committed before the next issue
-An approval commits exactly the reviewed paths plus the issue source, using literal pathspecs and `git commit --only`. Unrelated staged entries stay in the index and are not committed. When the commit is disabled (`COMMIT_APPROVED=0`) or fails, the run stops and names the issues it did not start. A failed commit always exits non-zero, including on the last issue and when closing a split parent; approval and checkbox changes are preserved for a manual commit. A halt after a child leaves the split parent open. A fresh issue starting on a tree that already differs from HEAD is warned about, with the paths.
+An approval commits exactly the captured Git-normalized blobs plus the issue source. A scratch index applies filters during capture; blob IDs are pinned in parent memory and approval never restages implementation from the working tree. External diff and textconv output cannot replace the reviewed patch. Unrelated staged entries stay in the index and are not committed. When the commit is disabled (`COMMIT_APPROVED=0`) or fails, the run stops and names the issues it did not start. A failed commit always exits non-zero, including on the last issue and when closing a split parent; approval and checkbox changes are preserved for a manual commit. A halt after a child leaves the split parent open. A fresh issue starting on a tree that already differs from HEAD is warned about, with the paths.
 **Why:** an uncommitted approval would be reviewed as the next issue's diff and stashed away by its take_over.
-**Test:** smoke: F2: approved work is committed; the next issue reviews only its own diff | unit: commit.test.mjs | unit: completion.test.mjs
+Approval staging and commits disable all Git hooks. Completion and child creation compare the full issue ID; ambiguous duplicates are refused. A failed checkbox update cannot mark state done or publish a commit.
+**Test:** smoke: F2: approved work is committed; the next issue reviews only its own diff | unit: commit.test.mjs | unit: completion.test.mjs | unit: release-122.test.mjs
 
 ### INV-18 Severity decides, and every severity is accounted for
-`blocking_severities` and `followup_severities` together cover all four severities (contract error otherwise). Severity words are trimmed and case-folded; a known severity listed in neither blocks, as does an unknown one. Duplicates keep the higher severity. Across reviewer JSON candidates, the most severe usable findings win even when their verdict word is off-schema; a valid empty approval cannot erase a critical. There is no vote count and no percentage.
+`blocking_severities` and `followup_severities` together cover all four severities (contract error otherwise). Severity words are trimmed and case-folded; a known severity listed in neither blocks, as does an unknown one. Duplicates keep configured blocking evidence before comparing severity ranks. Findings from all non-echo JSON candidates are retained, even when another candidate is malformed; selection of schema metadata never removes evidence. There is no vote count and no percentage.
 **Why:** percentages over three reviewers collapse into unanimity, and "not written down" must not mean "does not block" (PRD R6).
-**Test:** smoke: F3: severity lists must partition; an unlisted known severity blocks | smoke: gate.mjs | unit: gate.test.mjs
+**Test:** smoke: F3: severity lists must partition; an unlisted known severity blocks | smoke: gate.mjs | unit: gate.test.mjs | unit: release-122.test.mjs
 
 ### INV-19 A reviewer retry can only add severity
-A reviewer whose output has no usable verdict gets one retry. The retry replaces the original only if it parses at least as well **and** its worst finding is at least as severe.
+A reviewer whose output has no usable verdict, or whose process failed, gets one retry. The retry replaces the original only if parse quality improves or a completed valid process replaces a failed one, without reducing the worst finding rank or losing configured blocking evidence.
 **Why:** the retry is a fresh process with no memory of the first pass; a cleaner parse that lost a critical is a lost finding.
-**Test:** smoke: F1: a retry that parses better but carries less keeps the original | smoke: e2e: unparseable reviewer JSON, one retry | unit: gate.test.mjs
+**Test:** smoke: F1: a retry that parses better but carries less keeps the original | smoke: e2e: unparseable reviewer JSON, one retry | unit: gate.test.mjs | unit: process-status.test.mjs
 
 ### INV-20 Governance is byte-identical after a tool-bearing role
-Before research, implement and implement_master the protected paths — governance, `.pi/`, the issue source and the wrapper — are snapshotted; afterwards they are compared. Any change is restored from the snapshot, the attempt is rejected with the paths named, and the log records `governance-modified`.
+Before research, implement and implement_master the protected paths — governance, `.pi/`, the issue source and the wrapper — are snapshotted; afterwards they are compared. The gates get the same check on a fresh snapshot, because the implementer writes the scripts the gate commands run. Any change is restored from the snapshot, the attempt is rejected with the paths named, and the log records `governance-modified`.
 **Why:** the guard matches command strings and `eval` walks past it; the property that matters is the files, and it is checkable. The issue source is protected because a model-written issue line would otherwise pass the reviewers (the diff filter hides it), land in the approve commit, and become the next run's work.
-**Test:** smoke: 1.2.0 governance integrity | unit: snapshot.test.mjs
+Snapshots record links without descending into their targets, restore object types without recursive target deletion, and verify restoration. Incomplete restoration stops the run. Engine state, Git config, hooks and the run lock (including configured paths and linked worktrees) have a separate in-memory snapshot around every role, gate and command issue-source read. A control-file violation restores bytes and stops the run. This is a process-boundary check, not an OS sandbox.
+**Test:** smoke: 1.2.0 governance integrity | unit: snapshot.test.mjs | unit: gate-integrity.test.mjs | unit: release-122.test.mjs
 
 ### INV-21 A split is bounded by depth, by the source, and by the root budget, and it resumes at its children
-The master may split only when the issue's depth is below `max_split_depth` and the issue source can create children; otherwise the split is a reject with a note. Two to five sub-issues, titles one line and bounded, texts bounded. Children are registered in the parent's tree (same budget, attempts of their own), run immediately, and close the parent when the state file shows every one of them done. A run interrupted after the split resumes at the open children and never implements the parent again; `--issue <child>` runs one child under its parent's tree.
+The master may split only when the issue's depth is below `max_split_depth` and the issue source can create children; otherwise the split is a reject with a note. Two to five sub-issues, titles one line and bounded, texts bounded. Children are registered in the parent's tree (same budget, attempts of their own), run immediately, and close the parent when the state file shows every one of them done. A run interrupted after the split, including by `--max-runs`, leaves the parent `split` and resumes at the open children, never implementing the parent again; only a child that failed blocks the parent; `--issue <child>` runs one child under its parent's tree.
 **Why:** PRD §4.4: attempts are a quality signal per issue, the budget a resource limit per tree, and depth caps the exponential growth. A parent the master called too big for one diff must not be re-implemented by the next run; a model-authored title must not be able to write issue lines.
-**Test:** smoke: 1.2.0 split | smoke: 1.2.0 split resume | unit: issues.test.mjs | unit: master-decision.test.mjs
+At greater depths, state resolves the original root rather than the immediate parent. A descendant is not run again by the original issue-list traversal. Pauses propagate through every ancestor, and `--issue <grandchild>` consumes the original root budget.
+**Test:** smoke: 1.2.0 split | smoke: 1.2.0 split resume | unit: issues.test.mjs | unit: master-decision.test.mjs | unit: split-pause.test.mjs
 
 ### INV-22 The harness is chosen per provider, never by governance
 `--harness` (or the wrapper) maps providers to harnesses; pi is the default for every provider. Claude Code takes only the roles of its provider. The same `AGENTS.md` runs with pi alone and with pi plus Claude Code. A role routed to a harness that cannot run its provider is refused at start and in `doctor`, with the role and its provider named.
@@ -138,9 +143,9 @@ Gate findings live in their own file and enter the implement prompt as prose, un
 **Test:** smoke: P2.2 blocking findings survive a 300-line lint | smoke: P2.1 MEMORY.md feeds implement + research | smoke: F6: the blocker carries the findings, and history is byte-capped | unit: prompts.test.mjs | unit: text.test.mjs | unit: blocker.test.mjs
 
 ### INV-28 The pipeline never writes governance, and the project keeps no loop logic
-Only govern writes governance; `init` validates the options and contract before writing the wrapper (executable bit recorded in the index, line endings pinned to LF in `.gitattributes`), the `.gitignore` entry and an empty issue file with any missing parent directories. Without a contract, `init` fails and points at govern without changing setup files. `/automate` forwards all supplied arguments; a missing `--harness` value is an error. The wrapper carries a version pin and no logic; the engine ships in the package and shells out to no inline programs. A contract field that still carries a decision marker refuses the run.
-**Why:** a pipeline that edits the contract it runs on makes every later run wrong; a copied loop drifts and cannot be tested once.
-**Test:** smoke: 1.2.0 init and doctor | unit: traceability.test.mjs | unit: yaml.test.mjs | unit: init.test.mjs | unit: pi-sdk.test.mjs
+Only govern writes governance; `init` validates the options and contract before writing the wrapper (executable bit recorded in the index, line endings pinned to LF in `.gitattributes`), the `.gitignore` entry and an empty issue file with any missing parent directories. Without a contract, `init` fails and points at govern without changing setup files. `/automate` forwards all supplied arguments; a missing `--harness` value is an error. The wrapper carries a version pin and no logic; the engine ships in the package and shells out to no inline programs. A contract field that still carries a decision marker refuses the run, and so does a marker on any line of any governance file (`SOUL.md`, `AGENTS.md`, `MEMORY.md`, the harness copies, relocated files included): `doctor` reports it as FAIL with file and line, a real run exits 2 before the startup gate and before any model call, a dry-run notes it.
+**Why:** a pipeline that edits the contract it runs on makes every later run wrong; a copied loop drifts and cannot be tested once; an open decision in `SOUL.md` would enter every prompt as if it had been made.
+**Test:** smoke: 1.2.0 init and doctor | unit: traceability.test.mjs | unit: yaml.test.mjs | unit: init.test.mjs | unit: pi-sdk.test.mjs | unit: markers.test.mjs
 
 ### INV-29 A role timeout ends the process tree and returns within the grace period
 `ROLE_TIMEOUT_SECONDS` ends the harness process and everything it started (process group on POSIX, `taskkill /T` on Windows), empties the answer, logs status 124, and the loop continues at most half a second after the process's exit — it never waits on a grandchild that still holds stdout. The engine's own interruption ends every running role the same way.

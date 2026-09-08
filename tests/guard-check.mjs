@@ -33,7 +33,7 @@ writeFileSync(join(typebox, "package.json"), JSON.stringify({ name: "typebox", t
 writeFileSync(join(typebox, "index.js"), "export const Type = { Object: (s) => s, Optional: (s) => s, String: (s) => s };\n");
 // Same layout as the package, so the extension's relative imports of lib/ resolve.
 copyFileSync(join(root, "extensions", "pipeline-guard.ts"), join(dir, "extensions", "pipeline-guard.ts"));
-for (const rel of ["guard/patterns.mjs", "integrity/governance-paths.mjs", "state/store.mjs", "cli/status.mjs"]) {
+for (const rel of ["guard/patterns.mjs", "integrity/governance-paths.mjs", "state/store.mjs", "state/lock.mjs", "cli/status.mjs", "util/exec.mjs"]) {
 	mkdirSync(join(dir, "lib", rel.split("/")[0]), { recursive: true });
 	copyFileSync(join(root, "lib", rel), join(dir, "lib", rel));
 }
@@ -72,6 +72,11 @@ async function expect(handler, event, shouldBlock, label) {
 for (const k of ["PIPELINE_UNATTENDED", "PIPELINE_ALLOW_DESTRUCTIVE", "PIPELINE_ALLOW_GOVERNANCE_WRITE"]) delete process.env[k];
 process.env.PIPELINE_GUARD = "on";
 let h = load();
+
+// F12/F13: plain file tools must not bypass the engine's control ownership.
+await expect(h, write(".git/hooks/pre-commit"), true, "write a Git hook");
+await expect(h, write(".pipeline/state/one.json"), true, "write budget state");
+await expect(h, { type: "tool_call", toolName: "edit", input: { path: ".git/config" } }, true, "edit Git config");
 
 // Reads of governance files are not writes, whatever else the line redirects.
 await expect(h, bash("cat AGENTS.md 2>/dev/null"), false, "cat AGENTS.md 2>/dev/null");

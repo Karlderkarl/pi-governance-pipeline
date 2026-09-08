@@ -91,10 +91,12 @@ test("ids that sanitise to the same directory are refused; raw ids are trimmed",
 	writeFileSync(p, "- [ ] feat/a: slash\n- [ ] feat-a: dash\n");
 	await assert.rejects(tasksMdSource(p, root).list(), (e) => e.code === "SOURCE" && /"feat\/a" and "feat-a" both become "feat-a"/.test(e.message));
 	writeFileSync(p, "- [ ]  spaced : leading space\n- [ ] a: x\n- [ ] a: x again\n");
+	await assert.rejects(tasksMdSource(p, root).list(), /both become "a"/);
+	writeFileSync(p, "- [ ]  spaced : leading space\n- [ ] a: x\n");
 	const list = await tasksMdSource(p, root).list();
 	assert.deepEqual(
 		list.map((i) => i.raw),
-		["spaced", "a", "a"],
+		["spaced", "a"],
 	);
 	assert.equal(list[0].line, "spaced : leading space");
 	const cmd = commandSource('printf "%s\\n" "x/1: one" "x-1: two"', { root, env: process.env });

@@ -38,7 +38,7 @@ Line numbers are stripped because `implement_master` does not receive the diff; 
 
 ## reviewers
 
-Three roles, three processes, three contexts. Each receives the issue, the diff (truncated per file, omitted paths named in a manifest), the same first 120 lines of `SOUL.md`, the severity definitions, and the output schema, with its own review focus. None receives another's verdict, and none is told how many reviewers exist or which model implemented. See [operations](../skills/governance-pipeline/references/operations.md) for the isolation flags per harness.
+Three roles, three processes, three contexts. Each receives the issue, the diff, the same first 120 lines of `SOUL.md`, the severity definitions, and the output schema, with its own review focus. A real run refuses an incomplete diff before launching reviewers; only dry-run renders a truncated preview with an omissions manifest. None receives another's verdict, and none is told how many reviewers exist or which model implemented. See [operations](../skills/governance-pipeline/references/operations.md) for the isolation flags per harness.
 
 | Role | Focus |
 |---|---|
@@ -69,13 +69,13 @@ The gate depends on this being machine-readable. The reviewer is told to emit **
 }
 ```
 
-- `verdict`: `approve` | `reject` — advisory; severity decides the gate. The word decides only whether the reviewer gets its one retry. The retry is a fresh process with no memory of the first pass, so it replaces the original only if its parse-quality rank strictly improves **and** its worst finding is at least as severe.
+- `verdict`: `approve` | `reject` — advisory; severity decides the gate. Invalid schema or a failed process gets one retry. Replacement needs improved parse quality, or a completed valid review replacing a failed process, without reducing the worst finding rank or losing configured blocking evidence. A failed process or malformed finding array cannot fill a panel seat; valid blocking findings still survive.
 - `severity`: `critical` | `high` | `medium` | `low` — case and surrounding whitespace are normalized. Unknown values such as `blocker` still block; the gate never drops unknown severities.
 - `line`: integer or `null` when file-level. `findings`: empty array when nothing found.
 
 Severity definitions are in the prompt, not in the reviewer's head: **critical** exploitable now, data loss, or fundamentally broken · **high** a real bug or vulnerability under plausible conditions · **medium** should be fixed, shipping without it is defensible · **low** style, polish, nitpick.
 
-Parsing is defensive: every fenced block and the raw text are candidates, the candidate with the worst finding wins (a quoted `{"verdict":"approve","findings":[]}` from the diff cannot displace a real reject), a schema echo (`approve|reject`) is never a candidate, and prose is never regexed into a verdict.
+Parsing is defensive: every fenced block and the raw text are candidates. All candidate findings survive; selecting schema metadata never discards evidence. A malformed candidate makes the response unavailable without erasing valid findings. Deduplication preserves configured blocking membership before severity rank. A schema echo (`approve|reject`) is never a candidate, and prose is never regexed into a verdict.
 
 ## controller
 

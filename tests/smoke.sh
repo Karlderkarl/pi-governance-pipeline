@@ -66,6 +66,13 @@ if npm install --prefix "$guard_types" --no-save --no-fund --no-audit \
   PI_TEST_SDK_DIR="$sdk_dir" node --test "$ROOT/tests/unit/pi-sdk.test.mjs" \
     || fail "Pi template and resource-isolation integration tests failed"
 else
+  # Locally the shims are a fair fallback. In CI on a runtime that supports the
+  # SDK, a failed install would silently skip the skill, prompt and isolation
+  # tests that only the real loader can run — so it fails the suite there.
+  sdk_ok="$(node -e 'const [a,b]=process.versions.node.split(".").map(Number); console.log(a>22||(a===22&&b>=19)?1:0)')"
+  if [[ -n "${CI:-}" && "$sdk_ok" == 1 ]]; then
+    fail "the Pi SDK did not install; the skill, prompt and isolation tests need it in CI"
+  fi
   echo "smoke: real SDK types unavailable; falling back to tests/shims" >&2
   npx --yes --package typescript@5.8.3 tsc --noEmit -p "$ROOT/tests/tsconfig.guard.json" \
     || fail "pipeline-guard.ts failed tsc --noEmit"
@@ -99,7 +106,8 @@ skill_body_lines="$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{c++} END{print c+0}'
 for key in PIPELINE_ALLOW_DESTRUCTIVE MIN_REVIEWERS PIPELINE_ALLOW_DEEP_SPLIT APPEND_SYSTEM.md COMMIT_APPROVED BLOCKER_HISTORY_MAX_BYTES ROLE_TIMEOUT_SECONDS 'code execution'; do
   grep -q "$key" "$REFS/operations.md" || fail "operations.md does not document $key"
 done
-[[ "$(grep -c '^### INV-' "$REFS/invariants.md")" -ge 25 ]] || fail "invariants.md lists fewer than 25 invariants"
+[[ "$(grep -c '^### INV-' "$ROOT/docs/invariants.md")" -ge 25 ]] || fail "docs/invariants.md lists fewer than 25 invariants"
+[[ ! -e "$REFS/invariants.md" ]] || fail "invariants.md is maintainer documentation and lives in docs/, not in the skill"
 [[ ! -e "$REFS/pipeline-template.md" ]] || fail "pipeline-template.md must be gone; invariants.md and operations.md replaced it"
 [[ ! -e "$ROOT/skills/governance-pipeline/assets" ]] || fail "the bundled assets directory must be gone"
 grep -q 'Mode: audit' "$ROOT/prompts/pipeline-audit.md" || fail "pipeline-audit.md does not select audit mode"
@@ -2044,8 +2052,8 @@ grep -qF -- 'chunks.length === 0' "$ROOT/lib/diff/capture.mjs" \
   || fail "a manifest-only diff would still satisfy the empty-diff guard"
 
 # ---------------------------------------------------------------- docs: every point has coverage in the audit list / skill
-grep -q 'take_over' "$REFS/invariants.md" || fail "invariants.md never names take_over"
-grep -q 'implement_master' "$REFS/invariants.md" || fail "invariants.md never names implement_master"
+grep -q 'take_over' "$ROOT/docs/invariants.md" || fail "invariants.md never names take_over"
+grep -q 'implement_master' "$ROOT/docs/invariants.md" || fail "invariants.md never names implement_master"
 grep -q 'AGENTS.override.md' "$REFS/governance-files.md" || fail "governance-files.md does not mention AGENTS.override.md"
 grep -q 'MUST be gitignored' "$REFS/operations.md" || fail "operations.md must require gitignoring .pipeline/"
 grep -q 'MEMORY.md' "$REFS/audit.md" || fail "audit.md does not ask whether blockers reached MEMORY.md"
@@ -2285,14 +2293,14 @@ grep -q "older blocker text omitted" "$bc_prompt" || fail "blocker history was n
 grep -q "NEWEST-BLOCKER-LINE" "$bc_prompt" || fail "byte cap dropped the newest blocker text"
 if grep -q "old-blocker-line-1$" "$bc_prompt"; then fail "byte cap kept the oldest blocker text"; fi
 
-# ---------------------------------------------------------------- F8: a null finding is dropped, not a stack trace
+# ---------------------------------------------------------------- F8: malformed finding entries cannot fill a panel seat
 echo '{"role":"x","verdict":"approve","findings":[null,"text",{"severity":"low","file":"f","line":1,"title":"t"}]}' > "$TMP/r-null.json"
 rc=0; node "$LIB/gate.mjs" --check "$TMP/r-null.json" >/dev/null 2>"$TMP/null.err" || rc=$?
-[[ $rc -eq 0 ]] || fail "--check on a null finding element failed (got $rc): $(cat "$TMP/null.err")"
+[[ $rc -eq 2 ]] || fail "--check must request a retry for malformed finding entries (got $rc): $(cat "$TMP/null.err")"
 rc=0; node "$LIB/gate.mjs" "$TMP/r-null.json" > "$TMP/gate-null.json" 2>"$TMP/null.err" || rc=$?
-[[ $rc -eq 0 ]] || fail "gate on a null finding element failed (got $rc): $(cat "$TMP/null.err")"
+[[ $rc -eq 4 ]] || fail "gate must block an incomplete panel (got $rc): $(cat "$TMP/null.err")"
 if grep -q TypeError "$TMP/null.err"; then fail "gate threw on a null finding"; fi
-grep -q '"reviewers_used": 1' "$TMP/gate-null.json" || fail "reviewer with a null finding element was not counted"
+grep -q '"reviewers_used": 0' "$TMP/gate-null.json" || fail "reviewer with malformed findings filled a panel seat"
 grep -q '"title": "t"' "$TMP/gate-null.json" || fail "real finding next to a null element was lost"
 
 # ---------------------------------------------------------------- F13: one mapped reviewer names the real problem

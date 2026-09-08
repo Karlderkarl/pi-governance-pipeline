@@ -28,7 +28,7 @@ pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.m
 
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable contract block**.
 
-The contract block holds `contract_version: 2`, `models`, `budgets`, `review`, `issues` and `gates` exactly as specified in `contract.md`. Fence it as `yaml pipeline-contract` so an example block above it cannot become the routing. `issues.source` and `gates` come from the repository inspection in govern: the dev commands you found (`package.json` scripts, `Makefile`, `pyproject.toml`, `Cargo.toml`, `go.mod`) become gates; the place issues live becomes the source. Where you cannot decide, write the marker — the pipeline refuses to start on it, which is the intended failure.
+The contract block holds `contract_version: 2`, `models`, `budgets`, `review`, `issues` and `gates` exactly as specified in `contract.md`. Fence it as `yaml pipeline-contract` so an example block above it cannot become the routing. `issues.source` and `gates` come from the repository inspection in govern: the dev commands you found (`package.json` scripts, `Makefile`, `pyproject.toml`, `Cargo.toml`, `go.mod`) become gates; the place issues live becomes the source. Where you cannot decide, write the marker — the pipeline refuses to start on it, which is the intended failure. The engine scans every governance file line by line for `[USER DECISION REQUIRED]` and `[NEEDS PRD CLARIFICATION]`, so write the marker only where a decision is open and never quote it in prose that explains the convention.
 
 Prohibited actions deserve care: they are the last line of defence in a harness without permission prompts. Be specific — "never force-push to main", not "be careful with git".
 
@@ -67,4 +67,4 @@ Report in three buckets: PRD says X but governance says Y · governance says X b
 
 Ask per file whether to overwrite, merge, or skip. Merging is the usual answer for `MEMORY.md` and rarely right for `SOUL.md`.
 
-Under `pi -p` there is no UI to ask with. Report the drift, write nothing, and exit non-zero. An unattended audit that rewrites governance on its own defeats the purpose of having governance.
+Under `pi -p` there is no UI to ask with. Report the drift and state explicitly that nothing was written. An unattended audit that rewrites governance on its own defeats the purpose of having governance.

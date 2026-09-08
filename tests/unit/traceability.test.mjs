@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const invariants = readFileSync(join(root, "skills", "governance-pipeline", "references", "invariants.md"), "utf8");
+const invariants = readFileSync(join(root, "docs", "invariants.md"), "utf8");
 const smoke = readFileSync(join(root, "tests", "smoke.sh"), "utf8");
 
 const entries = invariants

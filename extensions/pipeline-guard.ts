@@ -29,7 +29,7 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { DESTRUCTIVE, PRIVILEGED, shellWritesGovernance, governancePath } from "../lib/guard/patterns.mjs";
+import { DESTRUCTIVE, PRIVILEGED, shellWritesGovernance, governancePath, controlPath } from "../lib/guard/patterns.mjs";
 import { readStates, statusText } from "../lib/cli/status.mjs";
 
 export default function (pi: ExtensionAPI) {
@@ -94,6 +94,7 @@ export default function (pi: ExtensionAPI) {
 		for (const tool of ["write", "edit"] as const) {
 			if (event.toolName !== tool) continue;
 			const path = String((event.input as { path?: string }).path ?? "");
+			if (controlPath(path)) return { block: true, reason: "pipeline-guard: Git metadata and pipeline state are owned by the operator and engine; model writes are refused." };
 			const name = governancePath(path);
 			if (!name) continue;
 			if (!ctx.hasUI) {
