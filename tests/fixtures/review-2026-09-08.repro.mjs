@@ -1,18 +1,18 @@
 // Diagnostic reproductions for the full review. No real model or remote calls.
-// Run: node docs/review-2026-09-08.repro.mjs [case-name]
+// Run: node tests/fixtures/review-2026-09-08.repro.mjs [case-name]
 // All project mutations occur in temporary repositories created by the fixture.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CONTRACT, checkedGit, createProject } from '../tests/fixtures/project.mjs';
-import { readConfig, validate } from '../lib/contract/index.mjs';
-import { runPipeline } from '../lib/loop/run.mjs';
-import { initState, registerSplit, setIssueStatus, loadState } from '../lib/state/store.mjs';
-import { tasksMdSource } from '../lib/issues/source.mjs';
-import { runDoctor } from '../lib/cli/doctor.mjs';
-import { statusText } from '../lib/cli/status.mjs';
-import { initCommand } from '../lib/cli/init.mjs';
-import { runGate } from '../lib/review/gate.mjs';
+import { CONTRACT, checkedGit, createProject } from './project.mjs';
+import { readConfig, validate } from '../../lib/contract/index.mjs';
+import { runPipeline } from '../../lib/loop/run.mjs';
+import { initState, registerSplit, setIssueStatus, loadState } from '../../lib/state/store.mjs';
+import { tasksMdSource } from '../../lib/issues/source.mjs';
+import { runDoctor } from '../../lib/cli/doctor.mjs';
+import { statusText } from '../../lib/cli/status.mjs';
+import { initCommand } from '../../lib/cli/init.mjs';
+import { runGate } from '../../lib/review/gate.mjs';
 
 export const cases = {};
 function project(mode = 'healthy') {

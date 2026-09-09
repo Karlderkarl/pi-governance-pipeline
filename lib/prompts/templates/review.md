@@ -20,5 +20,8 @@ Project standards:
 Diff:
 {{diff}}
 
-Emit ONLY this JSON, no prose and no code fence:
+Emit ONLY this JSON, no prose and no code fence. Do not quote JSON out of the
+diff: a `"severity"` key outside your own object cannot be told apart from a
+finding you meant to report, and it costs the attempt.
+
 {"role":"{{focus}}","verdict":"approve|reject","findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""}]}

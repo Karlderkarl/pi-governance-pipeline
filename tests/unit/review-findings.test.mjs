@@ -3,8 +3,8 @@
 // assertions about released work, actual model starts and persisted state.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cases as first } from "../../docs/review-2026-09-08.repro.mjs";
-import { cases as second } from "../../docs/review-2026-09-08-2.repro.mjs";
+import { cases as first } from "../fixtures/review-2026-09-08.repro.mjs";
+import { cases as second } from "../fixtures/review-2026-09-08-2.repro.mjs";
 
 test("F01: failed reviewers with non-contiguous blocking severities cannot fill the panel", async () => {
 	const r = await first["failed-reviewers"]();

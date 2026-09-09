@@ -1,6 +1,6 @@
 # Release 1.2.2 — Korrekturen und Verifikation
 
-Dieser Release enthält die bisherigen uncommitteten Korrekturen für F01–F13 und die nachfolgenden Gegenproben F14–F18 sowie G01/G02. Die Review-Berichte vom 8. September dokumentieren jeweils ihren damaligen Stand. Insbesondere `review-2026-09-08-3.md` ist Claudes Bericht; die zusätzliche Codex-Prüfung wird für den Release durch die folgenden automatisierten Regressionen nachvollziehbar erhalten.
+Dieser Release enthält die bisherigen uncommitteten Korrekturen für F01–F13 und die nachfolgenden Gegenproben F14–F18 sowie G01/G02. Die Review-Berichte vom 8. September werden nicht aufbewahrt; was sie festgestellt haben, ist als Regression erhalten — die Reproduktionen liegen als `tests/fixtures/review-2026-09-08*.repro.mjs` und laufen in `tests/unit/review-findings.test.mjs` mit.
 
 | Befund | Verhalten in 1.2.2 | Regression |
 |---|---|---|

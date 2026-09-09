@@ -39,7 +39,7 @@ One line each; the engine's test suite pins them. The full list with reasons and
 | INV-04 | A run lock prevents concurrent pipeline ownership of the same working tree |
 | INV-05 | The contract's `gates` run in order after every implementation and before any review; `gates: []` is explicit |
 | INV-07 | An abort is never silent: the issue is `blocked`, the blocker is appended to `MEMORY.md`, the run exits non-zero |
-| INV-08 | `--unattended` and `--auto-merge` both enable implementer trust after confirmation; external input has its own acknowledgement; trust never comes from an inherited environment value |
+| INV-08 | `--unattended` enables implementer trust after confirmation; `--auto-merge` is confirmed but grants nothing; external input has its own acknowledgement; trust never comes from an inherited environment value |
 | INV-10 | A resumed run restores its counters; `max_runs_per_tree` is frozen at tree creation and moved only by `state budget --set` |
 | INV-15 | Incomplete review coverage pauses approval; binary content needs a matching human receipt; submodule changes need a separate review and commit |
 | INV-22 | The harness is chosen per provider by `--harness` or the wrapper, never by governance |

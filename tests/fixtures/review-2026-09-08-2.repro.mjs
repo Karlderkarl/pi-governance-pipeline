@@ -4,7 +4,7 @@
 // own throwaway git repository under the OS temp directory and drives the
 // engine with a deterministic stub.
 //
-// Run: node docs/review-2026-09-08-2.repro.mjs [case-name]
+// Run: node tests/fixtures/review-2026-09-08-2.repro.mjs [case-name]
 //
 // Exit code 0 means the cases ran, not that the engine is correct. Each case
 // prints what it observed; after a fix the observations below must change.
@@ -12,9 +12,9 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONTRACT } from "../tests/fixtures/project.mjs";
-import { runPipeline } from "../lib/loop/run.mjs";
-import { git } from "../lib/util/exec.mjs";
+import { CONTRACT } from "./project.mjs";
+import { runPipeline } from "../../lib/loop/run.mjs";
+import { git } from "../../lib/util/exec.mjs";
 
 export const cases = {};
 

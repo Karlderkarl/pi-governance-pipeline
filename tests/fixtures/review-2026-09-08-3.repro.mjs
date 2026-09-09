@@ -4,7 +4,7 @@
 // those, run the two earlier repro files, whose observations must now all
 // have changed.
 //
-// Run: node docs/review-2026-09-08-3.repro.mjs [case-name]
+// Run: node tests/fixtures/review-2026-09-08-3.repro.mjs [case-name]
 //
 // No real model, no remote call, no credentials. Every case builds its own
 // throwaway git repository under the OS temp directory. Exit code 0 means the
@@ -13,9 +13,9 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONTRACT } from "../tests/fixtures/project.mjs";
-import { runPipeline } from "../lib/loop/run.mjs";
-import { git } from "../lib/util/exec.mjs";
+import { CONTRACT } from "./project.mjs";
+import { runPipeline } from "../../lib/loop/run.mjs";
+import { git } from "../../lib/util/exec.mjs";
 
 export const cases = {};
 

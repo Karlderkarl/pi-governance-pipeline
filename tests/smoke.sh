@@ -2700,7 +2700,7 @@ EOF
 esac
 
 # ================================================================ 1.2.0 pre-release review
-# Closed from docs/review-2026-09-05-1.2.0-pre-release.md. Each scenario below
+# Closed from the pre-release review of 1.2.0 (the report is not kept). Each scenario below
 # was red before its fix.
 
 # ---------------------------------------------------------------- 1.2.0 blocked issue leaves a clean tree

@@ -5,10 +5,13 @@ auto-develop pipeline from that governance: one deliberately chosen model per st
 independent multi-model review, severity-based gating, and a hard run budget.
 The pipeline ships in the package. The skill configures it; nothing is copied.
 
-Version 1.2.3 closes the review findings of the two independent 1.2.2 reviews:
-retry evidence, Git-filter and submodule boundaries at capture and approval, and
-unambiguous contract marking. Accepted follow-up findings are recorded in
-`MEMORY.md` instead of a gitignored file.
+Version 1.2.4 closes the findings of three further independent reviews. The
+one that mattered: a reviewer or master writing one JSON object as plain text
+and repeating it in a code fence lost the free-standing one entirely, so a
+panel reporting `critical` could approve and commit. Also: a timed-out reviewer
+keeps the finding it already wrote, `git stash` runs inside the same integrity
+guard as capture and approval, `--auto-merge` no longer grants implementer
+trust, and the wrapper's LF pin is verified as git resolves it.
 See [release notes](release-notes.md).
 
 ```
@@ -47,18 +50,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.2.3
+pi install npm:pi-governance-pipeline@1.2.4
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.3
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.4
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.2.3
+pi -e npm:pi-governance-pipeline@1.2.4
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.3
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.4
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -149,7 +152,7 @@ docs/                         repository only, not packed
   invariants.md                INV-01 … INV-29, each with the test that pins it
 ```
 
-Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.3/docs/prompt-builders.md).
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.4/docs/prompt-builders.md).
 This repository-only document is not required to use the installed skill.
 
 ## The contract
@@ -268,7 +271,7 @@ configuration remain available. Research and judges retain context files such as
 
 pi has no permission dialog and `pi -p` has no UI. In addition to the engine checks above:
 
-- **The startup gate.** `--unattended` and `--auto-merge` are confirmed before the loop
+- **The startup gate.** `--unattended` and `--auto-merge` are confirmed before the loop; only `--unattended` grants trust
   (TTY, or `--yes`). An external issue source (`!command`, or a contract command without
   `trust: internal`) is confirmed the same way: its text feeds every prompt.
 - **Governance integrity.** Governance files, `.pi/`, the issue source and the wrapper

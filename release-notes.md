@@ -1,3 +1,33 @@
+# v1.2.4
+
+### Fixed
+
+- **A reviewer or master could report `critical` and the pipeline approved and committed anyway.** JSON was recovered only from fenced blocks and from the whole answer, and the whole answer is cut from the first `{` to the last `}` — across two objects that never parses. An object written as plain text next to a fenced one was therefore no candidate at all. Reproduced end to end: three reviewers reporting `critical`, a master writing `reject`, exit 0 and a commit. Every `{` is now its own starting point with fresh brace and quote state, so prose carrying an unmatched `{` or `"` cannot hide the object either.
+- A `severity` or `decision` key that no parsed object holds is now unaccounted-for evidence: the reviewer loses its panel seat and the master's `approve` or `split` becomes `reject`. What the scanner cannot reach must not release work.
+- A reviewer that hit `ROLE_TIMEOUT_SECONDS` lost the findings it had already written — the answer was emptied before the rule "a finding is evidence whatever the exit code" could see it. Reviewers keep their partial output and only lose the panel seat; judges and research still lose theirs, because a truncated verdict is not evidence.
+- `git stash` was the one filter-running Git operation outside the integrity guard that already wraps diff capture and approval, so a project clean filter could reset `runs_used` unobserved. The stash, including the copy-out and write-back of governance, now runs inside that guard.
+- `models.*.model` and `.provider` were only checked for presence. A nested map routed to `provider/[object Object]` through validation and `doctor`, and failed two attempts later at the first model call. Both must now be non-empty strings on every mapped role, not only on the reviewers.
+- An `AGENTS.md` with a prose line `review:` — the section `governance-files.md` asks for — was read as a contract that failed to parse and refused the whole run. Only the `pipeline-contract` marker, or a contract key inside a fence that did not parse, counts as intent now.
+- The wrapper's LF pin is verified as git resolves it, for `text` and `eol`, from the project's own `.gitattributes` evaluated alone. `linguist-generated=true` pinned nothing, `text eol=crlf` and `-text` pinned the opposite, `-text eol=lf` normalises nothing, and a rule supplied only by `core.attributesFile` or `.git/info/attributes` does not survive a clone — all four reported success before.
+- Truncation of the review diff and the reviewer JSON cuts on a UTF-8 character boundary instead of mid-sequence.
+- On a case-insensitive filesystem the stash restored both spellings of a context file (`AGENTS.md` and `AGENTS.MD`), renaming it on disk. The preserved set is deduplicated by real path.
+
+### Changed
+
+- **`--auto-merge` no longer grants implementer trust.** Granting `--approve` / `bypassPermissions` was the flag's only actual effect, which contradicted its own help text ("parsed and confirmed, not implemented") and made a flag named after merging the shortest route to a fully trusted implementer. It is still confirmed at the startup gate as the adaptation point for a real merge step. INV-08 changed with it.
+- Reviewer output that cannot be fully processed carries an `unprocessed_review` finding that blocks the attempt and survives a clean retry, because a retry is a different answer and proves nothing about the first. It never enters the implement prompt — it asks the reviewer for well-formed JSON, which no implementation can supply — and two attempts in a row carrying it end the issue as a configuration error instead of spending the tree budget on a formatting problem. The reviewer prompt asks explicitly not to quote JSON out of the diff.
+- `peerDependencies` are bounded (`^0.85.0` for the Pi SDK, `^1.3.0` for typebox) instead of `*`, so an SDK change that breaks the guard extension is visible.
+- `--tools` is appended last in the Claude Code adapter; it is variadic and previously worked only because it happened to be written last in each branch.
+- The finished 1.2.0 refactor plan and the archived review reports are no longer kept. The reproductions two of them carried are live regressions and moved to `tests/fixtures/review-2026-09-08*.repro.mjs`.
+
+### Validation
+
+- 176 tests passed locally on Windows (Node 26.8.1, Git Bash); 4 skip without `PI_TEST_SDK_DIR` and pass with the installed Pi SDK.
+- The full smoke suite passed (`smoke OK`), as did `tsc --noEmit` against the real SDK, the guard behaviour test and `git diff --check`.
+- Every finding above has a regression that fails without its fix: `tests/unit/review-2026-09-09.test.mjs` and `tests/unit/review-safety.test.mjs`, with `tests/fixtures/mixed-json-stub.mjs`, `prose-hidden-json-stub.mjs`, `quoting-reviewer-stub.mjs` and `unprocessed-review-stub.mjs`. The review-parsing regressions run to the commit decision, not only over the parser — the consequence of losing a finding was a commit, and a parser assertion does not show that.
+- `P1.1 never-json run: 17 model calls` is unchanged across every round of this release, so no change moved the abort path for a broken reviewer setup.
+- No live evaluation of PRD-to-governance generation, no live Claude Code run, and no macOS or Linux execution is claimed for this release; CI covers Ubuntu 18/22 and Windows 22.
+
 # v1.2.3
 
 ### Fixed

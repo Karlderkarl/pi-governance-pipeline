@@ -17,7 +17,7 @@ The versioned interface between governance and the pipeline. `govern` writes the
 ## Reading rules
 
 - All fields live in `AGENTS.md`, in a fenced YAML block (` ```yaml ` or ` ```yml `). Mark exactly one as `yaml pipeline-contract`: multiple marked fences are a contract error, even if one is an example. A marked block must contain at least one recognized top-level contract field; empty, comment-only or unrelated example blocks refuse instead of selecting defaults. Without a marked fence, the first YAML fence containing contract keys is used and multiple candidates produce a warning. A `~~~` fence or an unclosed backtick fence does not parse.
-- If the file contains `pipeline-contract` or a line matching `models:` / `budgets:` / `review:` / `contract_version:`, **but no fenced YAML block parsed**, that is a contract error (exit 2) — not silent defaults. A file with neither still takes the documented default path.
+- If the file contains `pipeline-contract`, or a contract key line **inside** an untagged or YAML-tagged fence, **but no fenced YAML block parsed**, that is a contract error (exit 2) — not silent defaults. That is the `~~~` fence, the fence whose closing backticks never arrived, and the ``` fence missing its language tag. A bare `models:` or `review:` line in the prose is *not* a contract attempt — `AGENTS.md` is expected to have a review-rules section — and a file with no contract at all still takes the documented default path.
 - The YAML subset: block maps, block sequences, inline maps `{ a: b }`, inline lists `[a, b]`, quoted and plain scalars, booleans, integers, null, `#` comments. Quotes protect commas, colons and `#`, so `run: "eslint --ext .js,.ts src"` survives intact. Block scalars (`|`, `>`), anchors, aliases, tags, nested sequences (`- - x`) and duplicate keys are contract errors that name the construct — a second `implement:` never silently wins.
 - Every field is optional in v1. Absence is a documented state, never an error. In v2, `issues.source` and `gates` are required (see below).
 - Unknown fields are ignored, not rejected — forward compatibility. They still produce a **warning** that names the key (`models.implement_msater`, `budgets.max_atempts_controller`, …) so a typo cannot vanish into the merged config.
@@ -135,7 +135,7 @@ Validation runs in `init`, `doctor`, at the start of every run, and in the `gove
 - `contract_version` other than 1 or 2
 - a decision marker in any field
 - a known field with the wrong type: a role that is a scalar instead of `{ provider, model }`, `models`, `models.review`, `budgets` or `review` that is not a map, `no_self_review` that is not an unquoted `true` / `false`. Explicit `null` and empty YAML values in these fields are errors; only a missing key receives the default.
-- a mapped role without `model` (`implement: { provider: a }` would otherwise run the default model in silence)
+- a mapped role without `model` (`implement: { provider: a }` would otherwise run the default model in silence); a `model` or `provider` that is not a non-empty string (a nested map or an unquoted number would otherwise route to `provider/[object Object]`)
 - `implement_master` identical to `implement` (compared without `thinking`)
 - exactly one provider across mapped `review.*` roles; exactly one mapped `review.*` role ("only one models.review.* role is mapped"); a mapped `review.*` role without `provider`
 - severity lists that do not together cover `critical`, `high`, `medium`, `low`; an unknown severity; a list that is not a list
