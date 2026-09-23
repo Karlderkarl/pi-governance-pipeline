@@ -31,15 +31,15 @@ The example below is unmarked to keep it distinguishable from an active contract
 contract_version: 2
 
 models:
-  research:          { provider: openai,    model: gpt-5-mini,   thinking: low }
-  implement:         { provider: anthropic, model: sonnet-4.5,   thinking: high }
-  implement_master:  { provider: google,    model: gemini-3-pro, thinking: high }
+  research:          { provider: openai,    model: gpt-5-mini,        thinking: low }
+  implement:         { provider: anthropic, model: claude-sonnet-4-5, thinking: high }
+  implement_master:  { provider: google,    model: gemini-2.5-pro,    thinking: high }
   controller:        { provider: openai,    model: gpt-5-nano }
-  master_review:     { provider: anthropic, model: opus-4.5,     thinking: high }
+  master_review:     { provider: anthropic, model: claude-opus-4-5,   thinking: high }
   review:
-    security:        { provider: google,    model: gemini-3-flash, thinking: medium }
+    security:        { provider: google,    model: gemini-2.5-flash,  thinking: medium }
     quality:         { provider: openai,    model: gpt-5 }
-    correctness:     { provider: anthropic, model: haiku-4.5,   thinking: low }
+    correctness:     { provider: anthropic, model: claude-haiku-4-5,  thinking: low }
   constraints:
     no_self_review: true
 
@@ -63,6 +63,8 @@ gates:                                 # ordered; every gate must pass before an
   # - { name: complexity, run: "npx eslint --max-complexity 10 src" }
 ```
 
+The model ids are pi catalog ids; write the ids the project's providers actually offer (`pi --list-models`), never ids copied from this example.
+
 The harness (pi, Claude Code) is **not** a contract field: governance is harness-neutral, and the same file must run on either. See `operations.md`, "Harness selection".
 
 ## models
@@ -74,10 +76,14 @@ The harness (pi, Claude Code) is **not** a contract field: governance is harness
 | `implement_master` | Escalated implementation | Must differ from `implement` — a different blind spot is the point |
 | `controller` | Aggregates reviewer JSON, proposes a verdict | Weak model is fine; it does not decide |
 | `master_review` | Final decision | Runs on every attempt; should differ from `implement_master` |
-| `review.*` | Independent reviewers | Span ≥2 providers |
+| `review.*` | Independent reviewers | Span ≥2 vendors (see OpenRouter below) |
 | `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced over `provider/model` refs at run time; two unmapped roles carry no ref to compare, so map at least two `review.*` roles |
 
-`provider` and `model` are opaque strings passed through to the harness. `thinking` is optional per role (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and launches as pi's `--model provider/model:thinking`. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only; a different thinking level is not a different model. pi clamps a level the model does not expose to the next higher supported level, silently; the log records the level requested. Claude Code ignores the level.
+`provider` and `model` are opaque strings passed through to the harness. `thinking` is optional per role (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and launches as pi's `--model provider/model:thinking`. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only; a different thinking level is not a different model, and neither is an aggregator route (below). pi clamps a level the model does not expose to the next higher supported level, silently; the log records the level requested. Claude Code ignores the level.
+
+### OpenRouter and other routes to the same model
+
+With only an OpenRouter key, write the route explicitly: `{ provider: openrouter, model: google/gemini-2.5-flash }`. pi launches exactly that ref. For comparison the engine reads the vendor behind the route: `openrouter/google/gemini-2.5-flash` is Google's model, so a panel of `openrouter/google/…`, `openrouter/openai/…` and `openrouter/anthropic/…` spans three providers, and `openrouter/google/x` and `google/x` are one model for `no_self_review` and escalation. Three reviewers behind OpenRouter from a single vendor are still refused as a single provider. Prefer the explicit `openrouter` provider over a bare vendor prefix: with no native key pi also resolves `google/gemini-2.5-flash` through OpenRouter, but the same file silently switches to Google directly on a machine that has a Google key.
 
 ## budgets
 
@@ -137,7 +143,7 @@ Validation runs in `init`, `doctor`, at the start of every run, and in the `gove
 - a known field with the wrong type: a role that is a scalar instead of `{ provider, model }`, `models`, `models.review`, `budgets` or `review` that is not a map, `no_self_review` that is not an unquoted `true` / `false`. Explicit `null` and empty YAML values in these fields are errors; only a missing key receives the default.
 - a mapped role without `model` (`implement: { provider: a }` would otherwise run the default model in silence); a `model` or `provider` that is not a non-empty string (a nested map or an unquoted number would otherwise route to `provider/[object Object]`)
 - `implement_master` identical to `implement` (compared without `thinking`)
-- exactly one provider across mapped `review.*` roles; exactly one mapped `review.*` role ("only one models.review.* role is mapped"); a mapped `review.*` role without `provider`
+- exactly one vendor across mapped `review.*` roles (the vendor behind an `openrouter/<vendor>/<model>` route); exactly one mapped `review.*` role ("only one models.review.* role is mapped"); a mapped `review.*` role without `provider`
 - severity lists that do not together cover `critical`, `high`, `medium`, `low`; an unknown severity; a list that is not a list
 - `max_runs_per_tree` below `max_attempts_controller + max_attempts_master`; a budget field that is not an integer in range; `max_split_depth` above 1 without `PIPELINE_ALLOW_DEEP_SPLIT=1`
 - a `thinking` value that is not one of pi's levels

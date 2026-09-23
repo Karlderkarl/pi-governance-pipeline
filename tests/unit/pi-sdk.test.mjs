@@ -21,7 +21,12 @@ const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 async function loadPackagePrompts() {
 	const { loadPromptTemplates } = await sdk("core/prompt-templates.js");
-	return loadPromptTemplates({ cwd: packageRoot, agentDir: packageRoot, promptPaths: [join(packageRoot, "prompts")], includeDefaults: false });
+	const loaded = loadPromptTemplates({ cwd: packageRoot, agentDir: packageRoot, promptPaths: [join(packageRoot, "prompts")], includeDefaults: false });
+	// Pi 0.85 returns the template list; 0.87 returns { templates, diagnostics }
+	// and reports malformed frontmatter there instead of dropping it silently.
+	if (Array.isArray(loaded)) return loaded;
+	assert.deepEqual(loaded.diagnostics, [], "Pi reported prompt template diagnostics");
+	return loaded.templates;
 }
 
 test("Pi SDK runtime gate respects the Node 22.19 minimum", () => {

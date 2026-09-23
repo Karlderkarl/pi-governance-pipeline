@@ -64,7 +64,19 @@ if npm install --prefix "$guard_types" --no-save --no-fund --no-audit \
     || fail "pipeline-guard.ts failed tsc --noEmit against the real SDK"
   sdk_dir="$(node -e 'console.log(require("node:path").resolve(process.argv[1]))' "$guard_types/node_modules/@earendil-works/pi-coding-agent")"
   PI_TEST_SDK_DIR="$sdk_dir" node --test "$ROOT/tests/unit/pi-sdk.test.mjs" \
-    || fail "Pi template and resource-isolation integration tests failed"
+    || fail "Pi template and resource-isolation integration tests failed against the latest Pi SDK"
+  # The latest SDK shows upstream changes early; the floor keeps the oldest
+  # supported Pi (peerDependencies) honest. 0.85 → 0.87 changed the return
+  # shape of loadPromptTemplates, and only one of the two runs would see it.
+  sdk_floor="$(node -e 'console.log(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).peerDependencies["@earendil-works/pi-coding-agent"].replace(/^>=/,""))' "$ROOT/package.json")"
+  floor_dir="$TMP/pi-sdk-floor"
+  mkdir -p "$floor_dir"
+  npm install --prefix "$floor_dir" --no-save --no-fund --no-audit \
+    "@earendil-works/pi-coding-agent@$sdk_floor" "typebox" >/dev/null 2>&1 \
+    || fail "the Pi SDK floor $sdk_floor did not install"
+  PI_TEST_SDK_DIR="$(node -e 'console.log(require("node:path").resolve(process.argv[1]))' "$floor_dir/node_modules/@earendil-works/pi-coding-agent")" \
+    node --test "$ROOT/tests/unit/pi-sdk.test.mjs" \
+    || fail "Pi template and resource-isolation integration tests failed against the Pi SDK floor $sdk_floor"
 else
   # Locally the shims are a fair fallback. In CI on a runtime that supports the
   # SDK, a failed install would silently skip the skill, prompt and isolation

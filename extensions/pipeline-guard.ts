@@ -29,11 +29,11 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { DESTRUCTIVE, PRIVILEGED, shellWritesGovernance, governancePath, controlPath } from "../lib/guard/patterns.mjs";
+import { DESTRUCTIVE, PRIVILEGED, shellWritesGovernance, governancePath, controlPath, guardDisabled } from "../lib/guard/patterns.mjs";
 import { readStates, statusText } from "../lib/cli/status.mjs";
 
 export default function (pi: ExtensionAPI) {
-	const enabled = process.env.PIPELINE_GUARD !== "off";
+	const enabled = !guardDisabled();
 	const unattended = process.env.PIPELINE_UNATTENDED === "1";
 
 	pi.on("tool_call", async (event, ctx) => {

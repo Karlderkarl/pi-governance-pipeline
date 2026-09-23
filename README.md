@@ -5,13 +5,15 @@ auto-develop pipeline from that governance: one deliberately chosen model per st
 independent multi-model review, severity-based gating, and a hard run budget.
 The pipeline ships in the package. The skill configures it; nothing is copied.
 
-Version 1.2.4 closes the findings of three further independent reviews. The
-one that mattered: a reviewer or master writing one JSON object as plain text
-and repeating it in a code fence lost the free-standing one entirely, so a
-panel reporting `critical` could approve and commit. Also: a timed-out reviewer
-keeps the finding it already wrote, `git stash` runs inside the same integrity
-guard as capture and approval, `--auto-merge` no longer grants implementer
-trust, and the wrapper's LF pin is verified as git resolves it.
+Version 1.2.5 closes what two independent reviews and a full live run on
+2026-09-23 found in practice. `init` no longer reports success next to a
+foreign or differently pinned `auto-develop.sh` — the automate mode would have
+run that script as its dry-run. A review panel reached only through OpenRouter
+counts the vendors behind it instead of being refused as one provider. `doctor`
+and every run name `PIPELINE_GUARD=off` and a drifted `.pi/APPEND_SYSTEM.md`,
+the dry-run shows the routing of every role, the govern mode states its
+non-negotiable outputs and its unattended signal in the skill itself, and the
+suites run against both the oldest supported and the newest Pi.
 See [release notes](release-notes.md).
 
 ```
@@ -50,18 +52,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.2.4
+pi install npm:pi-governance-pipeline@1.2.5
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.4
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.5
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.2.4
+pi -e npm:pi-governance-pipeline@1.2.5
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.4
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.5
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -72,9 +74,12 @@ see `skills/governance-pipeline/references/operations.md`, "Trust and project re
 
 The project itself keeps a small wrapper, `auto-develop.sh`, that runs
 `npx pi-governance-pipeline@<pin> run`. The pin is the package version `init` wrote;
-`init --force` moves it, `init --local` points it at a checkout instead of npm.
+`init --force` moves it, `init --local` points it at a checkout instead of npm. Without
+`--force`, `init` exits 1 before writing anything when an existing `auto-develop.sh` is
+foreign, pinned to another version, or configured differently from the request.
 The engine supports Node >=18; Pi has its own runtime requirement (Node >=22.19
-for the tested Pi 0.85.1). Bash and git are required; use Git Bash on Windows.
+for Pi 0.85; tested with Pi 0.85.1 and 0.87.1). Bash and git are required; use Git Bash
+on Windows.
 
 ## Use
 
@@ -152,7 +157,7 @@ docs/                         repository only, not packed
   invariants.md                INV-01 … INV-29, each with the test that pins it
 ```
 
-Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.4/docs/prompt-builders.md).
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.5/docs/prompt-builders.md).
 This repository-only document is not required to use the installed skill.
 
 ## The contract
@@ -164,15 +169,15 @@ adaptation points. Full reference: `skills/governance-pipeline/references/contra
 ```yaml pipeline-contract
 contract_version: 2
 models:
-  research:          { provider: openai,    model: gpt-5-mini,   thinking: low }
-  implement:         { provider: anthropic, model: sonnet-4.5,   thinking: high }
-  implement_master:  { provider: google,    model: gemini-3-pro, thinking: high }
+  research:          { provider: openai,    model: gpt-5-mini,        thinking: low }
+  implement:         { provider: anthropic, model: claude-sonnet-4-5, thinking: high }
+  implement_master:  { provider: google,    model: gemini-2.5-pro,    thinking: high }
   controller:        { provider: openai,    model: gpt-5-nano }
-  master_review:     { provider: anthropic, model: opus-4.5,     thinking: high }
+  master_review:     { provider: anthropic, model: claude-opus-4-5,   thinking: high }
   review:
-    security:        { provider: google,    model: gemini-3-flash, thinking: medium }
+    security:        { provider: google,    model: gemini-2.5-flash,  thinking: medium }
     quality:         { provider: openai,    model: gpt-5 }
-    correctness:     { provider: anthropic, model: haiku-4.5,   thinking: low }
+    correctness:     { provider: anthropic, model: claude-haiku-4-5,  thinking: low }
   constraints:
     no_self_review: true
 budgets:
@@ -196,7 +201,9 @@ an implementer that escalates to itself, reviewers on a single provider, severit
 that do not cover all four severities, a tree budget below the attempt sum, a v2 contract
 without `issues.source` or `gates`, and any field that still carries a decision marker
 (`[USER DECISION REQUIRED]`) — that is how govern hands an open decision to a human
-instead of running on a placeholder. The same marker on any line of any governance
+instead of running on a placeholder. Reviewers must span two vendors: behind an aggregator
+the vendor counts, so `{ provider: openrouter, model: google/gemini-2.5-flash }` is Google's
+model, and the same model through two routes is one model for `no_self_review`. The same marker on any line of any governance
 file (`SOUL.md`, `MEMORY.md`, the harness copies, the prose of `AGENTS.md`) fails
 `doctor` and refuses a real run with file and line; a dry-run notes it.
 Known fields with the wrong type are errors, including explicit `null` or an
@@ -285,6 +292,8 @@ pi has no permission dialog and `pi -p` has no UI. In addition to the engine che
   bump, not a sandbox — run an unattended loop over a repository you do not fully trust
   in a container.
   Ordinary model write/edit calls into `.git` and `.pipeline/state` are refused.
+  `PIPELINE_GUARD=off` switches it off everywhere, including every implementer a run
+  starts; `doctor` and each run warn while it is set.
 
 Integrity checks run at process boundaries. They do not undo external side effects
 or protect against a hostile process that destroys state and kills the parent before
@@ -311,8 +320,9 @@ PI_TEST_SDK_DIR="$(npm root -g)/@earendil-works/pi-coding-agent" node --test tes
 These integration tests use Pi's actual skill loader, template parser and resource
 loader, including conflicting global system prompts and executable extensions.
 They require Node >=22.19 for Pi 0.85; without `PI_TEST_SDK_DIR`, the unit command
-reports them as skipped. The smoke suite runs them against its temporary SDK install
-on supported Node versions. On Windows, expose Git Bash on PATH or set `PIPELINE_SHELL`
+reports them as skipped. The smoke suite runs them twice on supported Node versions:
+against the newest Pi SDK, which shows upstream changes early, and against the oldest
+supported one (the `peerDependencies` floor), which keeps that promise honest. On Windows, expose Git Bash on PATH or set `PIPELINE_SHELL`
 to its `bash.exe` for tests that exercise shell commands.
 `npm test` uses `node --test` without a directory argument so discovery works
 across Node 18, 22 and newer versions.
@@ -330,8 +340,9 @@ PI_LIVE_MODEL="provider/model:low" node tests/pi-live.mjs
 This packs and installs the artifact in a temporary project, loads its extension
 through real Pi, calls `pipeline_state`, and checks a deliberately unsafe fixture
 through a real reviewer, the severity gate and a tool-free master. It never edits
-your Pi settings or installs the package globally. The 1.2.1 check passed on Pi
-0.85.1 with `openrouter/openai/gpt-5-mini:low`. It verifies live wiring and provider
+your Pi settings or installs the package globally. Its state fixture is written by the
+engine's own state functions, so it cannot drift from the validator again. The 1.2.5
+check passed on Pi 0.85.1 with `openrouter/openai/gpt-5-mini:low`. It verifies live wiring and provider
 authentication, not the quality or independence of a full multi-provider panel.
 
 For 1.2.1, a separate read-only Pi review approved the corrected candidate with no

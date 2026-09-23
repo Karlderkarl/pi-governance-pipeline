@@ -42,3 +42,21 @@ test("missing harness values are rejected consistently before setup mutation", a
 	assert.equal(await initCommand(["--harness", "anthropic=unknown"], { root }), 1);
 	assert.deepEqual(readdirSync(root), before);
 });
+
+test("an existing wrapper that init would not replace fails before any setup file is written", async () => {
+	const version = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8")).version;
+	const foreign = "#!/usr/bin/env bash\necho legacy > legacy-ran.txt\n";
+	const older = "#!/usr/bin/env bash\nexec npx --yes pi-governance-pipeline@1.0.0 run \"$@\"\n";
+	for (const script of [foreign, older]) {
+		const root = createProject();
+		writeFileSync(join(root, "auto-develop.sh"), script);
+		const before = checkedGit(root, ["ls-files", "--stage"]);
+		assert.equal(await initCommand([], { root }), 1);
+		assert.equal(readFileSync(join(root, "auto-develop.sh"), "utf8"), script);
+		assert.equal(existsSync(join(root, ".gitattributes")), false);
+		assert.equal(checkedGit(root, ["ls-files", "--stage"]), before);
+		assert.equal(await initCommand(["--force"], { root }), 0);
+		assert.match(readFileSync(join(root, "auto-develop.sh"), "utf8"), new RegExp(`pi-governance-pipeline@${version.replace(/\./g, "\.")} run`));
+		assert.equal(await initCommand([], { root }), 0, "a second init on its own wrapper succeeds");
+	}
+});

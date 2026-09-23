@@ -161,3 +161,32 @@ test("wrong types in known fields are contract errors, not silent defaults", () 
 	const ok = readConfig(agents(`${PANEL}\n  constraints: { no_self_review: true }`));
 	assert.ok(!validate(ok.config, ok).errors.some((e) => /must be/.test(e)));
 });
+
+test("an OpenRouter panel counts the vendor behind each model, and identity ignores the route", () => {
+	// All three reviewers through one aggregator, three vendors behind it: a
+	// diverse panel. Before 1.2.5 this was refused as "single provider".
+	const routed = `models:
+  implement:        { provider: openrouter, model: z-ai/glm-5.3-flash, thinking: high }
+  implement_master: { provider: openrouter, model: deepseek/deepseek-v4-flash }
+  review:
+    security:    { provider: openrouter, model: google/gemini-2.5-flash-lite }
+    quality:     { provider: openrouter, model: openai/gpt-5-mini }
+    correctness: { provider: openrouter, model: anthropic/claude-haiku-4.5 }`;
+	const ok = readConfig(agents(routed));
+	const verdict = validate(ok.config, ok);
+	assert.deepEqual(verdict.errors, []);
+	// Still the route pi receives: identity is for comparison only.
+	assert.equal(resolveAllModels(ok.config)["review.security"], "openrouter/google/gemini-2.5-flash-lite");
+
+	// One vendor behind the aggregator is still one provider.
+	const single = readConfig(agents(routed.replace("openai/gpt-5-mini", "google/gemini-2.5-flash").replace("anthropic/claude-haiku-4.5", "google/gemini-2.5-pro")));
+	assert.match(validate(single.config, single).errors.join("\n"), /single provider \(google\)/);
+
+	// The same model through two routes is one model: escalation, self-review.
+	const mixed = readConfig(agents(routed.replace("{ provider: openrouter, model: deepseek/deepseek-v4-flash }", "{ provider: z-ai, model: glm-5.3-flash }")));
+	assert.match(validate(mixed.config, mixed).errors.join("\n"), /implement_master .* equals models\.implement/);
+	assert.equal(modelIdentity("openrouter/google/gemini-2.5-flash:high"), "google/gemini-2.5-flash");
+	assert.equal(modelIdentity("google/gemini-2.5-flash"), "google/gemini-2.5-flash");
+	assert.equal(modelIdentity("openrouter/auto"), "openrouter/auto");
+	assert.equal(modelIdentity("openrouter/google/gemini-2.5-flash:free"), "google/gemini-2.5-flash:free");
+});

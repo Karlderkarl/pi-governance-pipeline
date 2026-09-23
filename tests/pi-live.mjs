@@ -1,7 +1,7 @@
 // Opt-in release check: packs/installs the artifact in a temporary project,
 // then uses real Pi model calls. Not part of node --test or CI; incurs API cost.
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -38,8 +38,14 @@ assert.ok(resolved, "Pi is not installed");
 
 // The extension must resolve Pi/typebox through Pi's loader even though the
 // packed package has no local SDK install. Its only enabled tool is read-only.
-mkdirSync(join(consumer, ".pipeline", "state"), { recursive: true });
-writeFileSync(join(consumer, ".pipeline", "state", "live.json"), JSON.stringify({ root_id: "live", runs_used: 2, max_runs_per_tree: 10, issues: {} }));
+// The state comes from the engine's own writers, so the fixture cannot drift
+// from the validator: a hand-built object without `depth` and a root issue
+// made pipeline_state report "invalid state" once the schema tightened.
+const store = await artifact("lib/state/store.mjs");
+const stateDir = join(consumer, ".pipeline");
+store.initState(stateDir, "live", { budgets: { max_runs_per_tree: 10 } });
+store.recordAttempt(stateDir, "live", "live", "controller");
+store.recordAttempt(stateDir, "live", "live", "controller");
 const extensionArgs = [...pi.buildArgs({ isolation: "reviewer", model, trusted: false }), "--tools", "pipeline_state", "-e", join(packageDir, "extensions", "pipeline-guard.ts"), "--mode", "json"];
 const extension = await pi.launch(resolved, extensionArgs, {
 	promptText: 'Call pipeline_state with root_id "live", then report its runs_used and max_runs_per_tree. Use the tool, do not guess.',

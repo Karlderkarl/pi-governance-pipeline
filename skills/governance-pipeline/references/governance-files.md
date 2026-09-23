@@ -28,6 +28,8 @@ pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.m
 
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable contract block**.
 
+The engine commits approved work itself, as `pipeline: <id>: <title>`, with hooks disabled. A commit-message convention in governance applies to human commits only; do not describe it as the pipeline's.
+
 The contract block holds `contract_version: 2`, `models`, `budgets`, `review`, `issues` and `gates` exactly as specified in `contract.md`. Mark exactly one fence as `yaml pipeline-contract`; multiple marked fences are an error, including example fences. `issues.source` and `gates` come from the repository inspection in govern: the dev commands you found (`package.json` scripts, `Makefile`, `pyproject.toml`, `Cargo.toml`, `go.mod`) become gates; the place issues live becomes the source. Where you cannot decide, write the marker — the pipeline refuses to start on it, which is the intended failure. The engine scans every governance file for the phrases `USER DECISION REQUIRED`, `NEEDS PRD CLARIFICATION` and the legacy `NEEDS CLARIFICATION`, with or without brackets. Write them only for open decisions; never quote them in explanatory prose. Engine-written history escapes their spaces as Markdown HTML entities so a quotation cannot become a new decision.
 
 Prohibited actions deserve care: they are the last line of defence in a harness without permission prompts. Be specific — "never force-push to main", not "be careful with git".
@@ -41,7 +43,7 @@ Keep a short `SYSTEM.md` at the repository root as the human-readable source of 
 - `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global) — **replaces** the default system prompt
 - `.pi/APPEND_SYSTEM.md` or `~/.pi/agent/APPEND_SYSTEM.md` — **appends** without replacing
 
-Replacing the default prompt is a much larger step than appending. Govern writes the root file and copies it to `.pi/APPEND_SYSTEM.md` so it takes effect. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. `doctor` warns when the root file exists and the `.pi` copy does not.
+Replacing the default prompt is a much larger step than appending. Govern writes the root file and copies it byte for byte to `.pi/APPEND_SYSTEM.md` (`cp SYSTEM.md .pi/APPEND_SYSTEM.md`) so it takes effect; a paraphrased copy drifts with the next edit. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. `doctor` warns when the root file exists and the `.pi` copy is missing or differs from it (line endings aside).
 
 When any role runs through Claude Code (`--harness anthropic=claude-code`), render the same facts as `CLAUDE.md`. Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the contract still lives in `AGENTS.md`, which the pipeline reads itself. Reviewers and judges under Claude Code run with `--safe-mode`, which skips `CLAUDE.md`; research retains it.
 

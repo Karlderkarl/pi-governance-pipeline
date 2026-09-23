@@ -1,3 +1,35 @@
+# v1.2.5
+
+Closes what two independent reviews and a full live run found on 2026-09-23: `/govern`, `/automate`, `/pipeline-audit` and a real run of one issue on a throwaway project, through OpenRouter with three reviewer vendors. The run implemented, reviewed, approved and committed the issue on the first attempt; the findings below are what the path there exposed.
+
+### Fixed
+
+- **`init` reported success next to a wrapper it had not written.** A foreign `auto-develop.sh`, or one pinned to another version, produced a note and exit 0 with `next: ./auto-develop.sh --dry-run` — and the automate mode runs exactly that script next, so an arbitrary existing script ran as the "dry-run". Without `--force`, `init` now exits 1 before writing any setup file whenever the existing wrapper is not the one it would generate: foreign, another pin, or a configuration other than the one requested. The skill never runs a wrapper `init` refused.
+- **A review panel reached only through OpenRouter was refused as a single provider.** `openrouter/google/…`, `openrouter/openai/…` and `openrouter/anthropic/…` are three vendors' models behind one API; provider diversity now counts the vendor behind an aggregator route. The same model through two routes (`openrouter/google/x`, `google/x`) is one model for `no_self_review`, escalation and every overlap warning. pi still receives the ref exactly as written. Three reviewers of one vendor behind OpenRouter are still refused.
+- **The smoke suite broke against the current Pi (0.87.1).** `loadPromptTemplates` returns `{ templates, diagnostics }` since Pi 0.86; the SDK tests assumed a list. They accept both shapes and require empty `diagnostics` where Pi reports them. The skill, the prompts and the extension were unaffected; CI and the release workflow were blocked.
+- **The opt-in live check could not pass.** `tests/pi-live.mjs` wrote a hand-built state without `depth` or a root issue, which the validator has refused since the schema tightened; `pipeline_state` answered `invalid state`. The state now comes from the engine's own `initState` and `recordAttempt`.
+
+### Changed
+
+- **The govern mode states its non-negotiable outputs in `SKILL.md` itself**: the contract in `AGENTS.md` in one `yaml pipeline-contract` fence with the v2 fields as `contract.md` defines them, `.pi/APPEND_SYSTEM.md` as a byte copy of `SYSTEM.md` (`cp`), model ids the configured providers offer, and `doctor` run and shown before governance counts as done. In a live run a model that skipped the references wrote the contract into `SOUL.md`, invented `issues.source` and gate formats, and never ran `doctor`; another paraphrased the `.pi` copy.
+- **Unattended govern has an explicit signal.** The skill told the model not to ask "under `pi -p`", which a model cannot observe: in a live run it asked its questions, wrote nothing and exited 0. It now checks `PIPELINE_ALLOW_GOVERNANCE_WRITE` — the variable the guard already requires for unattended governance writes. `1` means write, with markers for open decisions; anything else means ask, and write nothing without answers.
+- The audit mode reads `audit.md` before its first command and reports every check with evidence; a passing `doctor` is not readiness on its own.
+- `doctor` and every run warn while `PIPELINE_GUARD=off` is set. It is often set user-wide for interactive sessions and then silently disables the guard in every implementer a run starts. It stays the operator's choice and is not dropped.
+- `doctor` warns when `.pi/APPEND_SYSTEM.md` differs from `SYSTEM.md` (line endings aside): pi loads only the `.pi` copy, and a paraphrase drifts with the next edit.
+- The dry-run prints the routing of `controller`, `master_review` and `implement_master`, whose prompts it cannot render because they need the panel's verdicts.
+- The contract example uses Pi catalog ids (`claude-sonnet-4-5`, `gemini-2.5-pro`, …) instead of invented ones that generated governance copied, and `contract.md` documents OpenRouter routing. Governance no longer promises a commit convention for pipeline commits, which the engine writes as `pipeline: <id>: <title>`.
+- `peerDependencies` for the Pi SDK is `>=0.85.1` instead of `^0.85.0`, which excluded every current Pi. 1.2.4 bounded the range to make SDK breakage visible; that job moves to the smoke suite, which now runs the SDK tests against both the newest Pi and the `peerDependencies` floor.
+
+### Validation
+
+- 181 unit tests on Windows (Node 26.8.2, Git Bash): 177 pass, 4 skip without `PI_TEST_SDK_DIR` and pass with the installed Pi 0.85.1.
+- The full smoke suite passed (`smoke OK`), including `tsc --noEmit` against the newest SDK and the SDK tests against Pi 0.87.1 and the floor 0.85.1 (5/5 each). `npm pack --dry-run`: 59 files; `git diff --check` clean.
+- `PI_LIVE_MODEL=openrouter/openai/gpt-5-mini:low node tests/pi-live.mjs` passed: packed extension and `pipeline_state`, a reviewer finding the seeded authorization regression, the blocking gate and a rejecting master.
+- End to end with 1.2.4 on a throwaway project before the fixes: `/govern`, `/automate`, `/pipeline-audit` and a real run of one issue (research, implementation, three reviewers on Google, DeepSeek and Anthropic models, controller, master, commit) through OpenRouter, under two cents.
+- The changed govern mode, live with `openrouter/openai/gpt-5-mini:low` and `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` — the model that failed before: it checked the signal and wrote without asking, put a v2 contract that validates into `AGENTS.md` with OpenRouter routes, made `.pi/APPEND_SYSTEM.md` with `cp`, located the package and ran `doctor`, and left markers for its open decisions. It still skipped the references; the skeleton in `SKILL.md` carried the shape.
+- Every code finding has a regression that fails without its fix: `tests/unit/init.test.mjs`, `tests/unit/contract.test.mjs`, `tests/unit/release-125.test.mjs`.
+- No live Claude Code run and no macOS or Linux execution is claimed for this release; CI covers Ubuntu 18/22 and Windows 22.
+
 # v1.2.4
 
 ### Fixed

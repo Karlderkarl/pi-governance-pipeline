@@ -21,7 +21,7 @@ Flags, variables, layout, logging and the threat model of the pipeline as it shi
 | Command | Effect |
 |---|---|
 | `run [flags]` | Run every open issue of the issue source |
-| `init [--harness <spec>] [--local] [--force]` | Validate options and contract first, write the wrapper (pinned to the package version, executable bit recorded in the index, an LF rule in project `.gitattributes` that git resolves to LF when that file is evaluated on its own, plus the effective `text` and `eol` from `git check-attr`), add `.pipeline/` to `.gitignore`, create a missing issue file and its parent directories |
+| `init [--harness <spec>] [--local] [--force]` | Validate options and contract first; an existing `auto-develop.sh` that is foreign, pinned to another version or configured differently from the request makes `init` exit 1 before any write (`--force` replaces it). Write the wrapper (pinned to the package version, executable bit recorded in the index, an LF rule in project `.gitattributes` that git resolves to LF when that file is evaluated on its own, plus the effective `text` and `eol` from `git check-attr`), add `.pipeline/` to `.gitignore`, create a missing issue file and its parent directories |
 | `doctor [--harness <spec>]` | PASS / WARN / FAIL per project check, including a decision marker in any governance file; exit 1 on FAIL |
 | `status` | Counters, tree budget, per-issue state |
 
@@ -31,7 +31,7 @@ Two 1.0.x facades stay callable for operators and the parity suite: `lib/governa
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--dry-run` | off | Renders prompts and prints the routing without calling a model; writes no state, consumes no budget |
+| `--dry-run` | off | Renders prompts and prints the routing of every role without calling a model (controller, master and the escalation implementer by routing only: their prompts need verdicts); writes no state, consumes no budget |
 | `--issue <id>` | — | Runs a single issue; an id that is not open is an error |
 | `--unattended` | off | Privileged steps allowed in child processes; confirmed once before the loop |
 | `--auto-merge` | off | Confirmed at startup, and nothing else: it declares intent for an adapted merge step and grants no privileges. Branch merging is not implemented; trust is `--unattended` |
@@ -66,7 +66,7 @@ Run-time knobs. The contract carries routing, budgets, gates and the issue sourc
 | `PIPELINE_ALLOW_DESTRUCTIVE` | — | `1` unlocks `sudo`, recursive `rm` and force-push in the guard even when unattended |
 | `PIPELINE_ALLOW_GOVERNANCE_WRITE` | — | `1` lets a non-interactive govern step write governance through the guard |
 | `PIPELINE_ALLOW_DEEP_SPLIT` | — | `1` accepts `max_split_depth > 1` |
-| `PIPELINE_GUARD` | on | `off` disables the extension's gating |
+| `PIPELINE_GUARD` | on | `off` disables the extension's gating, in interactive sessions and in every implementer a run starts. `doctor` and every run warn while it is set |
 | `GOVERNANCE_AGENTS` | `AGENTS.md` | Contract file for the `governance.mjs state` facade |
 
 Unset or empty numeric tuning variables silently use their default. Non-empty values accept decimal digits representing a safe integer at or above their minimum. Invalid values such as `1e6`, `512k`, whitespace or an unsafe integer emit a warning naming the value and fallback, then use the default. `MIN_REVIEWERS` and `--max-runs` have strict validation and refuse invalid values.
