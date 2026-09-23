@@ -1,7 +1,8 @@
 // INV-28: setup validates before writes, accepts options, and creates nested issue sources.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { initCommand } from "../../lib/cli/init.mjs";
 import { parseRunFlags } from "../../lib/cli/run.mjs";
@@ -44,7 +45,7 @@ test("missing harness values are rejected consistently before setup mutation", a
 });
 
 test("an existing wrapper that init would not replace fails before any setup file is written", async () => {
-	const version = JSON.parse(readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8")).version;
+	const version = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")).version;
 	const foreign = "#!/usr/bin/env bash\necho legacy > legacy-ran.txt\n";
 	const older = "#!/usr/bin/env bash\nexec npx --yes pi-governance-pipeline@1.0.0 run \"$@\"\n";
 	for (const script of [foreign, older]) {
