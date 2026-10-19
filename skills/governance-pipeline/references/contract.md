@@ -70,7 +70,7 @@ The harness (pi, Claude Code) is **not** a contract field: governance is harness
 
 | Role | Purpose | Notes |
 |---|---|---|
-| `research` | Gathers context before implementation | Runs once per issue, not per attempt; read-only tools |
+| `research` | Gathers context before implementation | Cached per issue, not run per attempt; a `take_over` drops the cache and it runs again for the master path; read-only tools |
 | `implement` | Writes the code | The main cost driver |
 | `implement_master` | Escalated implementation | Must differ from `implement` — a different blind spot is the point |
 | `master_review` | Final decision | Runs on every attempt; should differ from `implement_master` |
@@ -89,9 +89,9 @@ With only an OpenRouter key, write the route explicitly: `{ provider: openrouter
 
 `max_attempts_*` are per issue and start at zero for every child of a split. `max_attempts_controller` counts attempts by `implement`, `max_attempts_master` attempts by `implement_master`; the first name is kept from the retired controller role so existing contracts and state files stay valid. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth` caps how deep a split may go (default 1; above 1 needs `PIPELINE_ALLOW_DEEP_SPLIT=1`). Every budget field must be an integer: `max_attempts_*` and `max_runs_per_tree` ≥ 1; `max_split_depth` ≥ 0.
 
-`state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` do not change an existing tree. To raise the ceiling for a running tree: `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`, from the project root.
+`state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` do not change an existing tree. To raise the ceiling for a tree that stopped on it: `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`, from the project root, with no run active, and reopen the blocked issues — see "After a tree-budget stop" in `operations.md`.
 
-Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly five model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
+Sizing note: an attempt is five model calls (implement or implement_master, three reviewers, the master), plus one research call per issue. A parent may split after any of its attempts, not only the third. At split degree 4 and depth 1, a parent that splits after 3 attempts reaches `3 + 4 × 6 = 27` implementation runs; one that splits after 6 reaches `6 + 4 × 6 = 30`. The default of 25 is deliberately below both, so a pathological issue is stopped rather than fully explored.
 
 ## review
 

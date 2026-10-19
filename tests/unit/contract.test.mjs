@@ -114,6 +114,14 @@ test("v1 refusals stay: same implementer twice, single provider, severity lists 
 	assert.deepEqual(validate(seq.config, seq).errors, []);
 });
 
+test("a misspelt key inside a role warns instead of vanishing", () => {
+	const typo = readConfig(agents(PANEL.replace("thinking: high }", "thinkng: high }").replace("model: r2 }", "model: r2, provder: x }")));
+	assert.ok(typo.warnings.some((w) => w.includes("`models.implement.thinkng`")), typo.warnings.join("\n"));
+	assert.ok(typo.warnings.some((w) => w.includes("`models.review.quality.provder`")), typo.warnings.join("\n"));
+	assert.deepEqual(validate(typo.config, typo).errors, []);
+	assert.deepEqual(readConfig(agents(PANEL)).warnings.filter((w) => w.includes("unknown contract key")), []);
+});
+
 test("unknown keys warn and never refuse; unparsed intent refuses", () => {
 	const src = readConfig(agents(`${PANEL}\nbudgets:\n  max_atempts_controller: 9`));
 	assert.ok(src.warnings.some((w) => w.includes("max_atempts_controller")));

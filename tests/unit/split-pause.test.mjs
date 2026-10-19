@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runPipeline } from "../../lib/loop/run.mjs";
+import { stateCommand } from "../../lib/state/store.mjs";
 import { createProject } from "../fixtures/project.mjs";
 
 const STUB = `import { readFileSync, appendFileSync } from "node:fs";
@@ -68,10 +69,39 @@ test("a split whose sub-issue is blocked blocks the parent with its own MEMORY.m
 	writeFileSync(join(root, ".pipeline", "state", "one.json"), JSON.stringify(s));
 	const second = await runWith(root, {});
 	assert.notEqual(second.rc, 0, second.output);
-	assert.match(second.output, /blocked: one — not every sub-issue finished/);
+	assert.equal(second.output.match(/^blocked: one — /gm)?.length, 1, `one explanation per blocked issue:
+${second.output}`);
+	assert.match(second.output, /^blocked: one — written to/m);
 	assert.equal(state(root).issues.one.status, "blocked");
 	const memory = readFileSync(join(root, "MEMORY.md"), "utf8");
 	assert.match(memory, /## Blocker — one \(/);
 	assert.match(memory, /not every sub-issue finished: one\.2 \(blocked\)/);
 	assert.doesNotMatch(memory, /one\.1 \(/, "a finished sub-issue is not listed as open");
+});
+
+// The recovery after a stop: every blocked issue is reopened with `open`. For
+// a split parent that must mean "resume the split", not "implement it again".
+test("reopening a blocked split parent resumes at its blocked child instead of implementing the parent again", async () => {
+	const root = createProject();
+	writeFileSync(join(root, ".git", "stub.mjs"), STUB);
+	assert.equal((await runWith(root, { maxRuns: 2 })).rc, 0);
+	const s = state(root);
+	s.issues["one.2"].status = "blocked";
+	writeFileSync(join(root, ".pipeline", "state", "one.json"), JSON.stringify(s));
+	assert.notEqual((await runWith(root, {})).rc, 0);
+	assert.equal(state(root).issues.one.status, "blocked");
+
+	const dir = join(root, ".pipeline");
+	stateCommand(["issue", dir, "one", "one.2", "open"], {});
+	stateCommand(["issue", dir, "one", "one", "open"], {});
+	assert.equal(state(root).issues.one.status, "split", "a parent with children returns to split");
+	assert.equal(state(root).issues["one.2"].status, "open");
+	const resumed = await runWith(root, {});
+	assert.equal(resumed.rc, 0, resumed.output);
+	assert.match(resumed.output, /resuming split one: 1 open sub-issue/);
+	assert.match(resumed.output, /approved: one\.2/);
+	assert.equal(state(root).issues.one.status, "done");
+	const calls = readFileSync(join(root, ".pipeline", "calls.log"), "utf8");
+	const parentRuns = calls.split(/\r?\n/).filter((line) => line.startsWith("Implement this issue") && line.endsWith("| one"));
+	assert.equal(parentRuns.length, 1, `the parent was implemented again: ${calls}`);
 });

@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { GATE_TEXT_CHARS, allDroppedGate, gateForPrompt, runGate } from "../../lib/review/gate.mjs";
+import { GATE_TEXT_CHARS, allDroppedGate, gateForPrompt, gateTextForPrompt, runGate } from "../../lib/review/gate.mjs";
 import { checkReviewerText, extractJson } from "../../lib/review/reviewer-output.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "gate-"));
@@ -99,4 +99,31 @@ test("the master's gate summary clips texts, keeps a blocker's reason and drops 
 	assert.ok(text.indexOf('"blocking"') < text.indexOf('"followups"'));
 	assert.match(JSON.stringify(result), /x{50000}/, "the full gate result is untouched");
 	assert.deepEqual(gateForPrompt(allDroppedGate(2)).blocking, []);
+});
+
+// Cut at a byte offset, the summary became an unterminated string in the
+// master's prompt and lost what came after the cut.
+test("the master's gate summary stays valid JSON under its byte cap and says what it left out", () => {
+	const blockers = Array.from({ length: 40 }, (_, i) => finding("high", { line: i, title: `blocker ${i}`, rationale: `reason ${i} ${"r".repeat(900)}`, suggestion: "s".repeat(900) }));
+	const nits = Array.from({ length: 40 }, (_, i) => finding("low", { line: i, title: `nit ${i}` }));
+	const { result } = runGate({ files: [file({ role: "s", verdict: "reject", findings: [...blockers, ...nits] }), file(ok("q"))], minReviewers: 2 });
+	assert.equal(result.blocking.length, 40);
+	const fits = JSON.stringify(gateForPrompt(result));
+	assert.equal(gateTextForPrompt(result, 1e6, "gate.json"), fits, "under the cap nothing changes");
+	for (const cap of [20000, 6000, 2500, 900, 200]) {
+		const text = gateTextForPrompt(result, cap, "gate.json");
+		const parsed = JSON.parse(text);
+		assert.ok(Buffer.byteLength(text) <= cap || cap < 400, `${cap}: ${Buffer.byteLength(text)} bytes`);
+		assert.equal(parsed.truncated, true, String(cap));
+		assert.equal(parsed.full_file, "gate.json");
+		assert.equal(parsed.verdict, "blocked");
+	}
+	// Follow-ups go before a blocker's reason, and the reason before a blocker.
+	const mid = JSON.parse(gateTextForPrompt(result, 20000, "gate.json"));
+	assert.equal(mid.blocking.length, 40);
+	assert.ok(mid.blocking.every((b) => /^reason \d+/.test(b.rationale)), "the blockers keep a reason");
+	assert.ok(mid.followups_omitted > 0 || mid.followups.length === 40);
+	const small = JSON.parse(gateTextForPrompt(result, 2500, "gate.json"));
+	assert.equal(small.blocking.length + small.blocking_omitted, 40);
+	assert.deepEqual(small.followups, []);
 });

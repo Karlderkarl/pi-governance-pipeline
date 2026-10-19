@@ -68,4 +68,4 @@ Read [audit.md](references/audit.md) before the first command and work through e
 
 - Never let a prompt choose its model; routing comes from `AGENTS.md`.
 - Never bypass the startup gate: `--unattended`, `--auto-merge` and an external issue source are confirmed before the loop or by `--yes`, never mid-run.
-- Never edit `.pipeline/state` by hand; `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>` is the way to raise a ceiling.
+- Never edit `.pipeline/state` by hand. After a tree-budget stop, with no run active (the state commands take the working-tree lock and fail while one is), raise the ceiling with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>` and reopen each blocked issue with `… state issue .pipeline <root_id> <issue_id> open`: a blocked issue is skipped, so the budget alone resumes nothing. [operations.md](references/operations.md) has the details.

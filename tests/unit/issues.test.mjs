@@ -119,6 +119,15 @@ test("ids the filesystem folds together, and ids that are no file name, are refu
 	assert.deepEqual((await tasksMdSource(p, root).list()).map((i) => i.raw), [".hidden", "console", "task-1"]);
 });
 
+test("a split child id skips ids the collision check folds together", async () => {
+	const p = join(root, "split-fold.md");
+	writeFileSync(p, "- [ ] one: parent\n- [x] ONE.1: closed\n- [x] one.2.: closed\n");
+	const src = tasksMdSource(p, root);
+	assert.equal(await src.create({ parentRaw: "one", title: "first" }), "one.3");
+	assert.equal(await src.create({ parentRaw: "one", title: "second" }), "one.4");
+	assert.deepEqual((await src.list()).map((i) => i.raw), ["one", "one.3", "one.4"]);
+});
+
 test("a command source is capped like a gate", async () => {
 	const slow = commandSource("sleep 5; echo x-1: late", { root, env: process.env, timeoutMs: 500 });
 	await assert.rejects(slow.list(), (e) => e.code === "SOURCE" && /timed out after 1s/.test(e.message));

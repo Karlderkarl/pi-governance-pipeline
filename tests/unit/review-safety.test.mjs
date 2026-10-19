@@ -58,6 +58,8 @@ test("unconsumed nested keys and scanner exhaustion cannot release work", () => 
 // reviewer that left the verdict placeholder in but reported a real defect.
 const echo = '{"role":"security","verdict":"approve|reject","findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""}]}';
 const halfFilled = '{"role":"security","verdict":"approve|reject","findings":[{"severity":"critical","file":"work.txt","title":"Real defect"}]}';
+// The same defect written as one object instead of an array.
+const bareFinding = '{"role":"security","verdict":"approve|reject","findings":{"severity":"critical","file":"work.txt","title":"Real defect"}}';
 
 test("a pipe in the verdict marks an echo only when the findings are the schema's own", () => {
 	assert.equal(extractJson(echo), null, "the schema's example high is never evidence");
@@ -69,9 +71,23 @@ test("a pipe in the verdict marks an echo only when the findings are the schema'
 	// Mixed: the schema's placeholder stays out, the real finding stays in.
 	const mixed = halfFilled.replace('"findings":[', '"findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""},');
 	assert.deepEqual(extractJson(mixed).findings.map((f) => f.title), ["Real defect"]);
+	// A finding object where the array belongs is no echo either.
+	const bare = extractJson(bareFinding);
+	assert.deepEqual(bare.findings.map((f) => [f.severity, f.title]), [["critical", "Real defect"]]);
+	assert.equal(bare.invalidFindings, true);
+	assert.equal(gateFor(bareFinding).exit, 4);
+	for (const verdict of ["approve", "reject"]) {
+		const filled = extractJson(bareFinding.replace("approve|reject", verdict));
+		assert.deepEqual(filled.findings.map((f) => f.severity), ["critical"], verdict);
+		assert.equal(filled.invalidFindings, true, verdict);
+	}
+	// A finding with a finding object under it keeps both.
+	const nested = extractJson('{"severity":"critical","file":"a","title":"Top","findings":{"severity":"low","file":"b","title":"Nested"}}');
+	assert.deepEqual(nested.findings.map((f) => [f.severity, f.title]), [["critical", "Top"], ["low", "Nested"]]);
+	assert.equal(nested.invalidFindings, true);
 });
 
-for (const [name, text] of [["unprocessed severity", stranded], ["recovered finding", incomplete], ["finding under an unfilled verdict", halfFilled]]) {
+for (const [name, text] of [["unprocessed severity", stranded], ["recovered finding", incomplete], ["finding under an unfilled verdict", halfFilled], ["bare finding under an unfilled verdict", bareFinding]]) {
 	test(`${name} survives a clean retry and prevents approval and commit`, async () => {
 		const root = createProject();
 		const stub = join(root, ".git", "review.mjs");

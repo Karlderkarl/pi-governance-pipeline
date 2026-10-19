@@ -5,16 +5,15 @@ auto-develop pipeline from that governance: one deliberately chosen model per st
 independent multi-model review, severity-based gating, and a hard run budget.
 The pipeline ships in the package. The skill configures it; nothing is copied.
 
-Version 1.2.5 closes what two independent reviews and a full live run on
-2026-09-23 found in practice. `init` no longer reports success next to a
-foreign or differently pinned `auto-develop.sh` — the automate mode would have
-run that script as its dry-run. A review panel reached only through OpenRouter
-counts the vendors behind it instead of being refused as one provider. `doctor`
-and every run name `PIPELINE_GUARD=off` and a drifted `.pi/APPEND_SYSTEM.md`,
-the dry-run shows the routing of every role, the govern mode states its
-non-negotiable outputs and its unattended signal in the skill itself, and the
-suites run against both the oldest supported and the newest Pi.
-See [release notes](release-notes.md).
+Version 1.3.0 removes the `controller` role: the deterministic review gate
+already merges the findings, so an attempt is five model calls instead of six
+and the master decides on the original reviewer output next to the gate.
+It also closes the findings of the independent reviews of that change and of the skill. A schema echo no
+longer hides a real finding or decision nested in it, a governance path that
+is a link outside the integrity check is refused, a split can no longer write
+a backlog the runner then refuses, `doctor` fails such a backlog, and the
+recovery after a tree-budget stop is documented and tested, split parents
+included. See [release notes](release-notes.md).
 
 ```
 PRD ──▶ govern ──▶ SOUL.md · AGENTS.md · SYSTEM.md · MEMORY.md
@@ -52,18 +51,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.2.5
+pi install npm:pi-governance-pipeline@1.3.0
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.2.5
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.3.0
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.2.5
+pi -e npm:pi-governance-pipeline@1.3.0
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.2.5
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.3.0
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -158,7 +157,7 @@ docs/                         repository only, not packed
   invariants.md                INV-01 … INV-29, each with the test that pins it
 ```
 
-Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.2.5/docs/prompt-builders.md).
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.3.0/docs/prompt-builders.md).
 This repository-only document is not required to use the installed skill.
 
 ## The contract

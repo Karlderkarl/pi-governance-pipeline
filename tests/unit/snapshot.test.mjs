@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GUARD_PATHS, GOVERNANCE_FILES, diffPathspecExcludes, guardMatches, isGovernanceTreePath, preservePaths } from "../../lib/integrity/governance-paths.mjs";
-import { compareSnapshots, describeDiff, restoreSnapshot, takeSnapshot } from "../../lib/integrity/snapshot.mjs";
+import { compareSnapshots, describeDiff, restoreSnapshot, takeSnapshot, uncoveredLinks } from "../../lib/integrity/snapshot.mjs";
 
 test("snapshot detects modified, created and deleted governance and restores it", () => {
 	const root = mkdtempSync(join(tmpdir(), "snap-"));
@@ -104,4 +104,31 @@ test("governance paths: one list feeds the diff filter, the pathspecs and the gu
 	assert.equal(guardMatches("C:\\proj\\.pi\\settings.json"), ".pi/settings.json");
 	assert.equal(guardMatches("MYAGENTS.md"), undefined);
 	assert.ok(GUARD_PATHS.includes("AGENTS.override.md"));
+});
+
+// A link records its target, not its contents: a role that writes through one
+// changes governance without a byte of the snapshot moving.
+test("a governance link is safe only where its target is itself protected", () => {
+	const root = mkdtempSync(join(tmpdir(), "snap-links-"));
+	const kind = process.platform === "win32" ? "junction" : "dir";
+	writeFileSync(join(root, "AGENTS.md"), "a");
+	// The shared-config case: .pi is a junction to a directory nobody protects.
+	const shared = join(root, "shared-pi");
+	mkdirSync(shared);
+	writeFileSync(join(shared, "APPEND_SYSTEM.md"), "rules");
+	symlinkSync(shared, join(root, ".pi"), kind);
+	const linked = uncoveredLinks(takeSnapshot([join(root, "AGENTS.md"), join(root, ".pi")]));
+	assert.deepEqual(linked.map((l) => l.path), [join(root, ".pi")]);
+	// A link into a protected directory is covered by the walk of that directory.
+	const inside = mkdtempSync(join(tmpdir(), "snap-links-"));
+	mkdirSync(join(inside, ".pi"));
+	writeFileSync(join(inside, ".pi", "APPEND_SYSTEM.md"), "rules");
+	symlinkSync(join(inside, ".pi"), join(inside, "alias"), kind);
+	assert.deepEqual(uncoveredLinks(takeSnapshot([join(inside, ".pi"), join(inside, "alias")])), []);
+	// A dangling link points at something a role could create.
+	const dangling = mkdtempSync(join(tmpdir(), "snap-links-"));
+	symlinkSync(join(dangling, "missing"), join(dangling, ".pi"), kind);
+	assert.equal(uncoveredLinks(takeSnapshot([join(dangling, ".pi")])).length, 1);
+	// No link, no finding.
+	assert.deepEqual(uncoveredLinks(takeSnapshot([join(root, "AGENTS.md")])), []);
 });

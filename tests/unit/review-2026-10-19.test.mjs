@@ -64,6 +64,23 @@ test("a take_over after the implement ceiling was lowered keeps running", async 
 	assert.equal(state.issues.one.attempts_master, 2);
 });
 
+// A state from before implement_runs numbers attempts by the routing counter.
+// Pulling that counter down to a lowered ceiling reused an attempt number and
+// overwrote the archived prompt of the attempt that ran under it.
+test("a take_over on a legacy state above a lowered ceiling does not reuse an attempt number", async () => {
+	const root = createProject();
+	writeFileSync(join(root, "AGENTS.md"), CONTRACT.replace("gates: []", "budgets:\n  max_attempts_controller: 2\ngates: []"));
+	mkdirSync(join(root, ".pipeline", "state"), { recursive: true });
+	writeFileSync(join(root, ".pipeline", "state", "one.json"), JSON.stringify({
+		root_id: "one", runs_used: 3, max_runs_per_tree: 25, depth: 0,
+		issues: { one: { attempts_controller: 3, attempts_master: 0, status: "open" } },
+	}));
+	const { rc, output } = await run(root, { PROBE_MASTER: "take_over,approve" });
+	assert.equal(rc, 0, output);
+	assert.match(output, /^approved: one/m);
+	assert.deepEqual(prompts(root, "implement_master").map((f) => f.slice(0, "one-implement_master-a04".length)), ["one-implement_master-a04", "one-implement_master-a05"]);
+});
+
 test("a blocker cut out of the capped reviewer block still reaches the master with its reason", async () => {
 	const root = createProject();
 	const review = JSON.stringify({ role: "security", verdict: "reject", findings: [
