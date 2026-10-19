@@ -55,3 +55,23 @@ test("--max-runs inside a split leaves the parent split, and the next run resume
 	const parentImplementations = calls.split("\n").filter((line) => line.startsWith("Implement this issue") && line.endsWith("| one"));
 	assert.equal(parentImplementations.length, 1, `the parent was implemented again:\n${calls}`);
 });
+
+test("a split whose sub-issue is blocked blocks the parent with its own MEMORY.md entry", async () => {
+	const root = createProject();
+	writeFileSync(join(root, ".git", "stub.mjs"), STUB);
+	const first = await runWith(root, { maxRuns: 2 });
+	assert.equal(first.rc, 0, first.output);
+	// one.2 stopped on its own (its blocker is its own business); the parent
+	// must not end blocked without a word in MEMORY.md (INV-07).
+	const s = state(root);
+	s.issues["one.2"].status = "blocked";
+	writeFileSync(join(root, ".pipeline", "state", "one.json"), JSON.stringify(s));
+	const second = await runWith(root, {});
+	assert.notEqual(second.rc, 0, second.output);
+	assert.match(second.output, /blocked: one — not every sub-issue finished/);
+	assert.equal(state(root).issues.one.status, "blocked");
+	const memory = readFileSync(join(root, "MEMORY.md"), "utf8");
+	assert.match(memory, /## Blocker — one \(/);
+	assert.match(memory, /not every sub-issue finished: one\.2 \(blocked\)/);
+	assert.doesNotMatch(memory, /one\.1 \(/, "a finished sub-issue is not listed as open");
+});

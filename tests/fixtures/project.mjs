@@ -11,7 +11,6 @@ models:
   implement: { provider: anthropic, model: impl }
   implement_master: { provider: google, model: master }
   research: { provider: openai, model: research }
-  controller: { provider: openai, model: controller }
   master_review: { provider: google, model: judge }
   review:
     security: { provider: google, model: security }

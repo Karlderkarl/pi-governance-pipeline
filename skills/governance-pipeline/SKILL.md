@@ -28,7 +28,6 @@ First decide whether a human can answer: run `echo "${PIPELINE_ALLOW_GOVERNANCE_
        research:         { provider: openai,    model: gpt-5-mini }
        implement:        { provider: anthropic, model: claude-sonnet-4-5, thinking: high }
        implement_master: { provider: google,    model: gemini-2.5-pro }     # a different model than implement
-       controller:       { provider: openai,    model: gpt-5-nano }
        master_review:    { provider: anthropic, model: claude-opus-4-5 }
        review:                                                               # at least two vendors
          security:       { provider: google,    model: gemini-2.5-flash }

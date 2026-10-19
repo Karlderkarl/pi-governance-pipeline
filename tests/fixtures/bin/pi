@@ -35,10 +35,6 @@ case "$last" in
     log review-correctness
     echo '{"role":"correctness","verdict":"approve","findings":[]}'
     ;;
-  "Merge these reviewer"*)
-    log controller
-    echo '{}'
-    ;;
   "Decide this attempt"*)
     log master
     echo '{"decision":"approve","reasons":["ok"]}'

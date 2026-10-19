@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runGate } from "../../lib/review/gate.mjs";
+import { GATE_TEXT_CHARS, allDroppedGate, gateForPrompt, runGate } from "../../lib/review/gate.mjs";
 import { checkReviewerText, extractJson } from "../../lib/review/reviewer-output.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "gate-"));
@@ -77,4 +77,26 @@ test("non-string finding titles cannot crash or clear the severity gate", () => 
 		assert.equal(r.exit, 4);
 		assert.equal(r.result.blocking.length, 1);
 	}
+});
+
+test("the master's gate summary clips texts, keeps a blocker's reason and drops a follow-up's", () => {
+	const pad = "x".repeat(50000);
+	const high = file({ role: "s", verdict: "reject", findings: [finding("high", { rationale: `BLOCKER-REASON ${pad}`, suggestion: pad })] });
+	const low = file({ role: "q", verdict: "approve", findings: [finding("low", { title: "nit", rationale: pad })] });
+	const { result } = runGate({ files: [high, low], minReviewers: 2 });
+	const summary = gateForPrompt(result);
+	assert.equal(summary.verdict, "blocked");
+	assert.equal(summary.reviewers_used, 2);
+	assert.equal(summary.blocking.length, 1);
+	const [blocker] = summary.blocking;
+	assert.deepEqual({ ...blocker, rationale: undefined, suggestion: undefined }, { file: "a.ts", line: 1, title: "t", severity: "high", role: "s", rationale: undefined, suggestion: undefined });
+	assert.match(blocker.rationale, /^BLOCKER-REASON x+ \[…\]$/);
+	assert.equal(blocker.rationale.length, GATE_TEXT_CHARS + " […]".length);
+	assert.deepEqual(summary.followups, [{ file: "a.ts", line: 1, title: "nit", severity: "low", role: "q" }]);
+	assert.ok(JSON.stringify(summary).length < 2 * GATE_TEXT_CHARS + 1000);
+	// Blockers precede follow-ups, so a byte cap on the summary cuts follow-ups first.
+	const text = JSON.stringify(summary);
+	assert.ok(text.indexOf('"blocking"') < text.indexOf('"followups"'));
+	assert.match(JSON.stringify(result), /x{50000}/, "the full gate result is untouched");
+	assert.deepEqual(gateForPrompt(allDroppedGate(2)).blocking, []);
 });

@@ -39,12 +39,12 @@ test("doctor warns when .pi/APPEND_SYSTEM.md is not a copy of SYSTEM.md, line en
 	assert.match(runDoctor({ root, env: cleanEnv() }).lines.join("\n"), drift);
 });
 
-test("a dry-run prints the routing of controller, master_review and implement_master", async () => {
+test("a dry-run prints the routing of master_review and implement_master, and no controller", async () => {
 	const root = createProject();
 	let output = "";
 	const stream = { write(text) { output += text; } };
 	assert.equal(await runPipeline({ root, flags: { dryRun: true, issue: "one" }, stdout: stream, stderr: stream, env: cleanEnv() }), 0, output);
-	assert.match(output, /^\[dry-run\] controller -> openai\/controller \(not rendered/m);
+	assert.doesNotMatch(output, /^\[dry-run\] controller/m);
 	assert.match(output, /^\[dry-run\] master_review -> google\/judge \(not rendered/m);
 	assert.match(output, /^\[dry-run\] implement_master -> google\/master \(not rendered/m);
 });

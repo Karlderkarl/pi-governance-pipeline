@@ -31,7 +31,7 @@ Two 1.0.x facades stay callable for operators and the parity suite: `lib/governa
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--dry-run` | off | Renders prompts and prints the routing of every role without calling a model (controller, master and the escalation implementer by routing only: their prompts need verdicts); writes no state, consumes no budget |
+| `--dry-run` | off | Renders prompts and prints the routing of every role without calling a model (master and the escalation implementer by routing only: their prompts need verdicts); writes no state, consumes no budget |
 | `--issue <id>` | — | Runs a single issue; an id that is not open is an error |
 | `--unattended` | off | Privileged steps allowed in child processes; confirmed once before the loop |
 | `--auto-merge` | off | Confirmed at startup, and nothing else: it declares intent for an adapted merge step and grants no privileges. Branch merging is not implemented; trust is `--unattended` |
@@ -51,7 +51,7 @@ Run-time knobs. The contract carries routing, budgets, gates and the issue sourc
 | `COMMIT_APPROVED` | `1` | `0` leaves approved work uncommitted and stops the run after the first approval |
 | `DIFF_MAX_BYTES` | `524288` | Per-file shares bound the text diff. Incomplete coverage pauses the issue; unchanged restarts spend no additional implementation budget. Reduce the change or raise this cap before resuming. Dry-run renders the preview |
 | `BINARY_REVIEW_FILE` | — | Operator-owned JSON receipt outside the working tree, loaded before model work. Human approval binds repository-relative binary paths to SHA-256 hashes of their Git blob contents; see Binary review |
-| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON in the controller and master prompts |
+| `REVIEWERS_MAX_BYTES` | `65536` | Cap on concatenated reviewer JSON in the master prompt, and separately on the gate summary there; `gate.json` on disk stays complete |
 | `EXCLUSIONS_MAX_LINES` | `200` | Cap on tool output re-entering the implement prompt; gate findings are never displaced |
 | `MIN_REVIEWERS` | `2` | Panel floor, integer 1–3; other values refuse before model work. Two consecutive attempts below it abort as a configuration error |
 | `ROLE_TIMEOUT_SECONDS` | `0` | Cap around each role; a timeout ends the whole process tree, empties the answer and logs status 124 |
@@ -81,7 +81,7 @@ Isolation per role class:
 |---|---|---|---|
 | reviewer | `review.*` | `-nc -t read,grep,find,ls --no-approve -ne -ns -np` | `--safe-mode --permission-mode dontAsk --tools Read Grep Glob` |
 | research | `research` | `-t read,grep,find,ls --no-approve -ne -ns -np` | `--permission-mode dontAsk --tools Read Grep Glob` |
-| judge | `controller`, `master_review` | `--no-tools --no-approve -ne -ns -np` | `--safe-mode --tools ""` |
+| judge | `master_review` | `--no-tools --no-approve -ne -ns -np` | `--safe-mode --tools ""` |
 | implementer | `implement`, `implement_master` | all tools, `--approve` only after the startup gate | `--permission-mode acceptEdits`, `bypassPermissions` after the startup gate |
 
 Every pi role gets `-p --no-session`; every Claude Code role `-p --output-format json`. The prompt goes in on stdin. Pi reviewers, research and judges additionally receive `--system-prompt "" --append-system-prompt ""`, which selects the built-in base prompt without discovering global or project system-prompt files. This preserves authentication and model configuration. Pi research and judges still load context files; reviewers disable those with `-nc`. Claude Code reviewers and judges use safe mode, which also suppresses CLAUDE.md. Claude Code research has no safe mode: its read-only tool list does not suppress CLAUDE.md, plugins, hooks or MCP discovery. The implementer is the only class that can receive `--approve`. A role whose process exits non-zero is reported with the first line of its stderr, and the full text is kept as `<answer>.stderr` under the issue's work directory; two implementation attempts in a row that exit non-zero with an unchanged tree end the issue as a configuration error. The Claude Code adapter is checked against `claude --help` and a stub; it has no live verification in this release.
@@ -127,13 +127,13 @@ One per root issue. The single source of truth for counters — no model ever ho
 }
 ```
 
-`max_runs_per_tree` is frozen at tree creation; editing the contract later does not change an existing tree. Raise it from the project root with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`; the project holds only the wrapper, the library lives in the installed package. Children of a split live in the parent's file and consume the same budget.
+`attempts_controller` routes: implement runs while it is below `max_attempts_controller`. A `take_over` raises it to that ceiling without running an attempt and sets `taken_over`; a lowered ceiling never pulls it back. `implement_runs` counts the implement attempts that ran, and attempt numbers, blockers and `status` use it; `state attempts` reports both. A state written before `implement_runs` existed has no reconstructable count, so `status` shows `implement path N` for it. `max_runs_per_tree` is frozen at tree creation; editing the contract later does not change an existing tree. Raise it from the project root with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`; the project holds only the wrapper, the library lives in the installed package. Children of a split live in the parent's file and consume the same budget.
 
 Only one pipeline may own a physical working tree. A competing run or state CLI mutation fails with the `pipeline-run.lock` path in the resolved per-worktree Git directory, independent of caller TEMP/TMPDIR. `doctor` reports an existing lock. A crashed process leaves its lock in place: stop its surviving model processes and inspect the tree before manually removing that named lock. It is deliberately not auto-reclaimed. Outside a Git working tree, the fallback is `~/.pi-pipeline-locks/<sha256-of-canonical-root>.lock`; it also does not depend on TEMP/TMPDIR. All descendants, including a grandchild selected by `--issue`, retain the original tree budget; invocation caps propagate a pause through every split ancestor.
 
 Each issue also persists the mapped models that contributed to its current diff. `no_self_review` excludes all those contributors across escalation and resume, ignoring thinking-level suffixes. A successful `take_over` stash clears that history; a failed stash keeps it. For pre-existing state without this history, the engine conservatively uses the current routing for roles with recorded attempts; historical model names cannot be reconstructed after routing changes.
 
-`init` refuses an explicit harness/local configuration change that would leave the existing wrapper unchanged. Apply the requested replacement with `--force`. Issue IDs must be unique after normalization, including closed entries; completion and child creation compare the entire ID before the colon.
+`init` and `doctor` accept an existing `auto-develop.sh` only when its whole text is one `init` writes; a script that merely names the package version is foreign. `init` refuses an explicit harness/local configuration change that would leave the existing wrapper unchanged. Apply the requested replacement with `--force`. Issue IDs must be unique after normalization, including closed entries, and compared the way Windows and macOS compare file names (case and trailing dots ignored); `.`, `..` and device names such as `nul` are refused; completion and child creation compare the entire ID before the colon.
 
 ## Binary review
 

@@ -54,7 +54,24 @@ test("unconsumed nested keys and scanner exhaustion cannot release work", () => 
 	assert.equal(parseMasterDecision('{"extra":{"decision":"reject"}}\n' + fence('{"decision":"approve"}')).decision, "reject");
 });
 
-for (const [name, text] of [["unprocessed severity", stranded], ["recovered finding", incomplete]]) {
+// The schema line from the reviewer prompt, echoed back verbatim, and a
+// reviewer that left the verdict placeholder in but reported a real defect.
+const echo = '{"role":"security","verdict":"approve|reject","findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""}]}';
+const halfFilled = '{"role":"security","verdict":"approve|reject","findings":[{"severity":"critical","file":"work.txt","title":"Real defect"}]}';
+
+test("a pipe in the verdict marks an echo only when the findings are the schema's own", () => {
+	assert.equal(extractJson(echo), null, "the schema's example high is never evidence");
+	assert.equal(gateFor(echo).exit, 0);
+	const parsed = extractJson(halfFilled);
+	assert.deepEqual(parsed.findings.map((f) => f.title), ["Real defect"]);
+	assert.equal(parsed.invalidFindings, true, "an unfilled verdict fills no panel seat");
+	assert.equal(gateFor(halfFilled).exit, 4);
+	// Mixed: the schema's placeholder stays out, the real finding stays in.
+	const mixed = halfFilled.replace('"findings":[', '"findings":[{"severity":"high","file":"path","line":42,"title":"","rationale":"","suggestion":""},');
+	assert.deepEqual(extractJson(mixed).findings.map((f) => f.title), ["Real defect"]);
+});
+
+for (const [name, text] of [["unprocessed severity", stranded], ["recovered finding", incomplete], ["finding under an unfilled verdict", halfFilled]]) {
 	test(`${name} survives a clean retry and prevents approval and commit`, async () => {
 		const root = createProject();
 		const stub = join(root, ".git", "review.mjs");

@@ -34,7 +34,6 @@ models:
   research:          { provider: openai,    model: gpt-5-mini,        thinking: low }
   implement:         { provider: anthropic, model: claude-sonnet-4-5, thinking: high }
   implement_master:  { provider: google,    model: gemini-2.5-pro,    thinking: high }
-  controller:        { provider: openai,    model: gpt-5-nano }
   master_review:     { provider: anthropic, model: claude-opus-4-5,   thinking: high }
   review:
     security:        { provider: google,    model: gemini-2.5-flash,  thinking: medium }
@@ -74,12 +73,13 @@ The harness (pi, Claude Code) is **not** a contract field: governance is harness
 | `research` | Gathers context before implementation | Runs once per issue, not per attempt; read-only tools |
 | `implement` | Writes the code | The main cost driver |
 | `implement_master` | Escalated implementation | Must differ from `implement` — a different blind spot is the point |
-| `controller` | Aggregates reviewer JSON, proposes a verdict | Weak model is fine; it does not decide |
 | `master_review` | Final decision | Runs on every attempt; should differ from `implement_master` |
 | `review.*` | Independent reviewers | Span ≥2 vendors (see OpenRouter below) |
 | `constraints.no_self_review` | Drops a reviewer whose model implemented the diff | Default `true`. Enforced over `provider/model` refs at run time; two unmapped roles carry no ref to compare, so map at least two `review.*` roles |
 
 `provider` and `model` are opaque strings passed through to the harness. `thinking` is optional per role (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) and launches as pi's `--model provider/model:thinking`. Identity for `no_self_review` and for `implement` vs `implement_master` is `provider/model` only; a different thinking level is not a different model, and neither is an aggregator route (below). pi clamps a level the model does not expose to the next higher supported level, silently; the log records the level requested. Claude Code ignores the level.
+
+No model sits between the panel and the master: the deterministic review gate merges the findings, and `master_review` reads them next to the original reviewer JSON. A `models.controller` entry from an older contract is reported with a warning and then dropped before validation: it routes nothing, a decision marker in it is no contract error, and `governance.mjs model … controller` refuses instead of printing a model. The governance-wide marker scan still reads that line like any other, so remove the entry.
 
 ### OpenRouter and other routes to the same model
 
@@ -87,11 +87,11 @@ With only an OpenRouter key, write the route explicitly: `{ provider: openrouter
 
 ## budgets
 
-`max_attempts_*` are per issue and start at zero for every child of a split. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth` caps how deep a split may go (default 1; above 1 needs `PIPELINE_ALLOW_DEEP_SPLIT=1`). Every budget field must be an integer: `max_attempts_*` and `max_runs_per_tree` ≥ 1; `max_split_depth` ≥ 0.
+`max_attempts_*` are per issue and start at zero for every child of a split. `max_attempts_controller` counts attempts by `implement`, `max_attempts_master` attempts by `implement_master`; the first name is kept from the retired controller role so existing contracts and state files stay valid. `max_runs_per_tree` is held at the root and consumed across every descendant; it never resets. `max_split_depth` caps how deep a split may go (default 1; above 1 needs `PIPELINE_ALLOW_DEEP_SPLIT=1`). Every budget field must be an integer: `max_attempts_*` and `max_runs_per_tree` ≥ 1; `max_split_depth` ≥ 0.
 
 `state init` freezes `max_runs_per_tree` into the state file at tree creation. Later edits to `budgets` do not change an existing tree. To raise the ceiling for a running tree: `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>`, from the project root.
 
-Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly six model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
+Sizing note: at split degree 4 and depth 1 the loop reaches `3 + 4 × 6 = 27` implementation runs at roughly five model calls each. The default of 25 is deliberately below that, so a pathological issue is stopped rather than fully explored.
 
 ## review
 

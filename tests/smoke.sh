@@ -812,8 +812,8 @@ grep -q "equals models.implement_master" "$TMP/warn-master.err" \
   || fail "review.* == implement_master produced no warning"
 
 # ---------------------------------------------------------------- e2e: escalated no_self_review
-# review.security == implement_master: the reviewer runs while the controller
-# implements and is dropped once the master path starts. Regression guard: its
+# review.security == implement_master: the reviewer runs on the implement
+# attempts and is dropped once the master path starts. Regression guard: its
 # stale verdict must not gate the master attempts (permanent deadlock), and the
 # unparseable-output retry must never resurrect the dropped reviewer.
 proj3="$TMP/run-master-drop"; mkdir -p "$proj3/.pipeline/lib"
@@ -858,7 +858,6 @@ case "$last" in
   "You review a diff for one concern only: correctness"*)
     echo review-correctness >> "${PI_CALLS_LOG:?}"
     echo '{"role":"correctness","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo controller >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
   "Decide this attempt"*)  echo master >> "${PI_CALLS_LOG:?}"
     echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo unknown >> "${PI_CALLS_LOG:?}"; echo '{}' ;;
@@ -930,7 +929,6 @@ case "$last" in
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*)
     node -e 'const pad="x".repeat(90000); console.log(JSON.stringify({role:"security",verdict:"approve",findings:[{severity:"low",file:"f",line:1,title:"t",rationale:pad,suggestion:"s"}]}))' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -946,6 +944,13 @@ trunc_bytes="$(wc -c < "$proj_rev/.pipeline/work/issue-rev/reviewers.trunc")"
 [[ "$trunc_bytes" -lt 132000 ]] || fail "truncated reviewer JSON still too large: $trunc_bytes"
 grep -q "reviewer JSON truncated at 131072 bytes" "$proj_rev/.pipeline/work/issue-rev/reviewers.trunc" \
   || fail "truncation notice missing"
+# The gate summary in the master prompt must not carry the 90 KB rationale a
+# second time: the capped reviewer block is the only copy the master gets.
+master_prompt="$(ls "$proj_rev"/.pipeline/prompts/issue-rev/issue-rev-master_review-a01-* | head -1)"
+gate_line="$(grep '^Deterministic gate: ' "$master_prompt")"
+[[ "${#gate_line}" -lt 4096 ]] || fail "master prompt gate summary repeats reviewer rationale (${#gate_line} chars)"
+[[ "$(wc -c < "$master_prompt")" -lt 150000 ]] || fail "master prompt exceeds the reviewer cap: $(wc -c < "$master_prompt") bytes"
+grep -q '"rationale"' "$proj_rev/.pipeline/work/issue-rev/gate.json" || fail "gate.json on disk lost the rationale"
 
 # ---------------------------------------------------------------- gate floor
 # One surviving reviewer is not a panel: below --min-reviewers the gate blocks
@@ -997,7 +1002,6 @@ case "$last" in
   "You review a diff for one concern only: quality"*)
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
   "You review a diff for one concern only:"*) echo 'not json at all' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)  echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1055,10 +1059,10 @@ first_prompt="$(ls "$proj7"/.pipeline/prompts/issue-7/issue-7-implement-a01-* | 
 # block it can contain is attempt 5.
 grep -q "(attempt 5)" "$last_prompt" || fail "newest lint block must survive the cap"
 if grep -q "(attempt 1)" "$last_prompt"; then fail "oldest lint block should have been capped away"; fi
-# One archived prompt per attempt, not one per role: 3 controller + 3 master
+# One archived prompt per attempt, not one per role: 3 implement + 3 implement_master
 # attempts must each keep the prompt that produced them.
 [[ "$(count_files "$proj7"/.pipeline/prompts/issue-7/issue-7-implement-a*)" -eq 3 ]] \
-  || fail "controller attempts must each keep their prompt"
+  || fail "implement attempts must each keep their prompt"
 [[ "$(count_files "$proj7"/.pipeline/prompts/issue-7/issue-7-implement_master-a*)" -eq 3 ]] \
   || fail "master attempts must each keep their prompt"
 
@@ -1118,7 +1122,6 @@ case "$last" in
     echo 'not json at all' ;;
   "You review a diff for one concern only: quality"*) echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
   "You review a diff for one concern only: correctness"*) echo '{"role":"correctness","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1159,7 +1162,7 @@ rc=0
 out="$(cd "$proj_res" && PATH="$stub_ok:$PATH" PI_CALLS_LOG="$TMP/calls-resume.log" bash auto-develop.sh 2>&1)" || rc=$?
 [[ "$rc" -eq 0 ]] || fail "resume run failed (rc=$rc): $out"
 att="$(node "$LIB/governance.mjs" state attempts "$proj_res/.pipeline" issue-resume issue-resume)"
-# Two attempts already on disk; one more controller attempt should finish the issue.
+# Two attempts already on disk; one more implement attempt should finish the issue.
 echo "$att" | grep -q '"controller": 3' || echo "$att" | grep -q '"controller":3' \
   || fail "resume did not continue from stored counters: $att"
 echo "$out" | grep -q "^approved: issue-resume" || fail "resume did not approve: $out"
@@ -1183,7 +1186,6 @@ case "$last" in
   "Gather context"*) echo "research notes" ;;
   "Implement this issue"*) printf 'from-controller\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)
     if [[ -f .pipeline/work/issue-to/.took-over ]]; then
       echo '{"decision":"approve","reasons":["fresh"]}'
@@ -1377,7 +1379,6 @@ case "$last" in
     echo '{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE","rationale":"r","suggestion":"s"}]}' ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1410,7 +1411,6 @@ case "$last" in
   "You review a diff for one concern only: security"*) echo 'not json at all' ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1452,7 +1452,7 @@ out="$(cd "$proj_ga" && PATH="$stub_ok:$PATH" AGENTS_FILE="$proj_ga/good-agents.
 [[ $rc -eq 0 ]] || fail "AGENTS_FILE override died on cwd AGENTS.md (rc=$rc): $out"
 echo "$out" | grep -q "^approved: issue-ga" || fail "AGENTS_FILE override did not approve: $out"
 
-# ---------------------------------------------------------------- P1.1 config abort ~17 calls, not 55
+# ---------------------------------------------------------------- P1.1 config abort ~16 calls, not 55
 proj_p11="$TMP/run-p11"; mkdir -p "$proj_p11/.pipeline/lib"
 cp "$SH" "$proj_p11/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_p11/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj_p11/AGENTS.md"
@@ -1469,7 +1469,6 @@ case "$last" in
   "Gather context"*) log research; echo "research notes" ;;
   "Implement this issue"*) log implement; printf 'implemented\n' >> ./impl.txt ;;
   *"REMINDER"*|"You review a diff for one concern only:"*) log review; echo 'not json at all' ;;
-  "Merge these reviewer"*) log controller; echo '{}' ;;
   "Decide this attempt"*) log master; echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) log unknown; echo '{}' ;;
 esac
@@ -1480,13 +1479,18 @@ out="$(cd "$proj_p11" && PATH="$stub_p11:$PATH" PI_CALLS_LOG="$TMP/calls-p11.log
 [[ $rc -ne 0 ]] || fail "never-json reviewers should block, not approve"
 echo "$out" | grep -qi "Configuration error" || fail "panel-short abort must name a configuration error: $out"
 grep -qi "Configuration error" "$proj_p11/MEMORY.md" || fail "configuration error was not written to MEMORY.md"
-calls_p11="$(grep -cE '^(research|implement|review|controller|master)$' "$TMP/calls-p11.log" || true)"
-[[ "$calls_p11" -le 20 ]] || fail "never-json run still burned the tree ($calls_p11 calls): $(cat "$TMP/calls-p11.log")"
+# Expected 16: research, attempt 1 (implement, 3 reviewers + 3 retries,
+# master), attempt 2 (implement, 3 reviewers + 3 retries), then the abort.
+# The window absorbs a retry more or less; a whole extra attempt is 23.
+calls_p11="$(grep -cE '^(research|implement|review|master)$' "$TMP/calls-p11.log" || true)"
+[[ "$calls_p11" -le 18 ]] || fail "never-json run still burned the tree ($calls_p11 calls): $(cat "$TMP/calls-p11.log")"
 [[ "$calls_p11" -ge 15 ]] || fail "never-json run ended too early ($calls_p11 calls): $(cat "$TMP/calls-p11.log")"
 echo "P1.1 never-json run: $calls_p11 model calls"
-# controller+master of the second attempt must not have run
-[[ "$(grep -c '^controller$' "$TMP/calls-p11.log")" -eq 1 ]] \
-  || fail "second-attempt controller still ran: $(cat "$TMP/calls-p11.log")"
+# Every prompt is one of the roles above: a reintroduced controller, or any
+# other extra role, lands in the stub's catch-all.
+if grep -q '^unknown$' "$TMP/calls-p11.log"; then
+  fail "a prompt outside the known roles was sent: $(cat "$TMP/calls-p11.log")"
+fi
 [[ "$(grep -c '^master$' "$TMP/calls-p11.log")" -eq 1 ]] \
   || fail "second-attempt master still ran: $(cat "$TMP/calls-p11.log")"
 
@@ -1510,7 +1514,6 @@ case "$last" in
   "Gather context"*) echo "research notes" ;;
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff"*) sleep 20; echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1579,7 +1582,6 @@ case "$last" in
     echo '{"role":"security","verdict":"reject","findings":[{"severity":"critical","file":"a.ts","line":12,"title":"RCE-keep-me","rationale":"eval of input","suggestion":"do not eval"}]}' ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"reject","reasons":["critical"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1620,7 +1622,7 @@ PI_ADAPTER="$ROOT/lib/harness/pi.mjs"
 grep -q -- '--no-session' "$PI_ADAPTER" || fail "--no-session missing from the pi adapter"
 grep -q -- '"-nc"' "$PI_ADAPTER" || fail "reviewer -nc missing"
 grep -q 'read,grep,find,ls' "$PI_ADAPTER" || fail "reviewer read-only toolset missing"
-grep -q -- '--no-tools' "$PI_ADAPTER" || fail "controller/master --no-tools missing"
+grep -q -- '--no-tools' "$PI_ADAPTER" || fail "master --no-tools missing"
 grep -q -- '"-ne", "-ns", "-np"' "$PI_ADAPTER" || fail "reviewer -ne -ns -np isolation missing"
 proj_flags="$TMP/run-flags"; mkdir -p "$proj_flags/.pipeline/lib"
 cp "$SH" "$proj_flags/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_flags/.pipeline/lib/"
@@ -1638,7 +1640,6 @@ case "$last" in
   "Gather context"*) echo "research notes" ;;
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1649,7 +1650,7 @@ out="$(cd "$proj_flags" && PATH="$stub_flags:$PATH" PI_ARGV_LOG="$TMP/argv-flags
 [[ $rc -eq 0 ]] || fail "flag run failed (rc=$rc): $out"
 grep -q -- '--no-session' "$TMP/argv-flags.log" || fail "pi was not launched with --no-session"
 grep -q -- '-nc' "$TMP/argv-flags.log" || fail "reviewer was not launched with -nc"
-grep -q -- '--no-tools' "$TMP/argv-flags.log" || fail "controller/master missing --no-tools"
+grep -q -- '--no-tools' "$TMP/argv-flags.log" || fail "master missing --no-tools"
 # Implementer must keep tools (bash) — no --no-tools on a line that is only -p --no-session.
 if grep -E -- '--no-tools' "$TMP/argv-flags.log" | grep -qvE -- '-nc|--no-tools'; then
   :
@@ -1666,8 +1667,8 @@ grep -E -- '^-p --no-session -t read,grep,find,ls --no-approve -ne -ns -np' "$TM
 if grep -qE -- '(^| )--approve( |$)' "$TMP/argv-flags.log"; then
   fail "a run without --unattended passed --approve to a role: $(cat "$TMP/argv-flags.log")"
 fi
-[[ "$(grep -c -- '--no-tools --no-approve -ne -ns -np' "$TMP/argv-flags.log" || true)" -eq 2 ]] \
-  || fail "judges were not launched with --no-approve -ne -ns -np: $(cat "$TMP/argv-flags.log")"
+[[ "$(grep -c -- '--no-tools --no-approve -ne -ns -np' "$TMP/argv-flags.log" || true)" -eq 1 ]] \
+  || fail "the judge was not launched with --no-approve -ne -ns -np: $(cat "$TMP/argv-flags.log")"
 
 # ---------------------------------------------------------------- P3.3 global --max-runs (extension, not a PRD field)
 proj_mr="$TMP/run-maxruns"; mkdir -p "$proj_mr/.pipeline/lib"
@@ -1697,7 +1698,6 @@ case "$last" in
   "Gather context"*) log research; echo "research notes" ;;
   "Implement this issue"*) log implement; printf 'from-x\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*) echo '{"role":"x","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)
     if [[ -f .pipeline/work/issue-rr/.took-over ]]; then
       echo '{"decision":"approve","reasons":["fresh"]}'
@@ -1735,7 +1735,7 @@ grep -q 'is not gitignored' "$ROOT/lib/loop/run.mjs" || fail "gitignore warning 
 # The untracked branch of capture_diff filtered on a regex whose single trailing
 # `$` covered the whole alternation: `.pipeline` matched, `.pipeline/logs/x` did
 # not. Without a `.gitignore` entry every prompt, log and diff of the run went
-# into every reviewer, controller and master prompt.
+# into every reviewer and master prompt.
 proj_leak="$TMP/run-leak"; mkdir -p "$proj_leak/.pipeline/lib" "$proj_leak/.pi"
 cp "$SH" "$proj_leak/auto-develop.sh"; cp "$LIB"/*.mjs "$proj_leak/.pipeline/lib/"
 cp "$TMP/AGENTS.md" "$proj_leak/AGENTS.md"
@@ -1786,7 +1786,6 @@ case "$last" in
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{"verdict":"approve"}' ;;
   "Decide this attempt"*)  echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1816,12 +1815,12 @@ done < "$argv_log"
 if grep '^Gather context' "$argv_log" | grep -q -- '--approve'; then
   fail "research received --approve: $(grep '^Gather context' "$argv_log")"
 fi
-# Judges decide; after the gate they still get no --approve (pre-release review F7).
-if grep -E '^(Merge these reviewer|Decide this attempt)' "$argv_log" | grep -q -- ' --approve'; then
-  fail "a judge received --approve: $(grep -E '^(Merge these reviewer|Decide this attempt)' "$argv_log")"
+# The judge decides; after the gate it still gets no --approve (pre-release review F7).
+if grep '^Decide this attempt' "$argv_log" | grep -q -- ' --approve'; then
+  fail "the judge received --approve: $(grep '^Decide this attempt' "$argv_log")"
 fi
-grep -E '^(Merge these reviewer|Decide this attempt)' "$argv_log" | grep -q -- '--no-tools --no-approve -ne -ns -np' \
-  || fail "judges lost their isolation flags under --unattended: $(grep -E '^(Merge|Decide)' "$argv_log")"
+grep '^Decide this attempt' "$argv_log" | grep -q -- '--no-tools --no-approve -ne -ns -np' \
+  || fail "the judge lost its isolation flags under --unattended: $(grep '^Decide' "$argv_log")"
 
 # ---------------------------------------------------------------- 1.0.14 R3: an unadapted script says it has no gate
 proj_gate="$TMP/run-nogate"; mkdir -p "$proj_gate/.pipeline/lib"
@@ -1859,7 +1858,6 @@ case "$last" in
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{"verdict":"approve"}' ;;
   "Decide this attempt"*)
     echo '```json'
     echo '{"decision":"reject","reasons":["real verdict"]}'
@@ -1896,7 +1894,6 @@ case "$last" in
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff for one concern only:"*)
     echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{"verdict":"approve"}' ;;
   "Decide this attempt"*)
     echo 'Schema I was given:'
     echo '```json'
@@ -1958,7 +1955,6 @@ case "$last" in
     echo '```json'
     echo '{"verdict":"approve","findings":[]}'
     echo '```' ;;
-  "Merge these reviewer"*) echo '{"verdict":"approve"}' ;;
   "Decide this attempt"*)  echo '{"decision":"approve","reasons":["gate is the guard here"]}' ;;
   *) echo '{}' ;;
 esac
@@ -1997,7 +1993,6 @@ case "$last" in
   "You review a diff"*)
     printf '%s' "$last" >> "${PI_DUMP:?}"
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"take_over","reasons":["start over"]}' ;;
   *) echo '{}' ;;
 esac
@@ -2046,7 +2041,6 @@ case "$last" in
   "You review a diff"*)
     printf '%s' "$last" > "${PI_DUMP:?}"
     echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -2121,7 +2115,6 @@ case "$last" in
   "You review a diff for one concern only: security"*)
     echo '{"role":"security","verdict":"blocked","findings":[{"severity":"critical","file":"a.ts","line":1,"title":"RCE-keep","rationale":"r","suggestion":"s"}]}' ;;
   "You review a diff for one concern only:"*) echo '{"role":"quality","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -2154,7 +2147,6 @@ case "$last" in
   "Implement this issue"*)
     if grep -q "issue-a" <<<"$last"; then printf 'WORK-OF-ISSUE-A\n' > ./a.txt; else printf 'WORK-OF-ISSUE-B\n' > ./b.txt; fi ;;
   "You review a diff"*) echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)
     if grep -q "issue-b" <<<"$last" && [[ ! -f .pipeline/work/issue-b/.took ]]; then
       mkdir -p .pipeline/work/issue-b; touch .pipeline/work/issue-b/.took
@@ -2286,7 +2278,6 @@ case "$last" in
   "Gather context"*) echo "research notes" ;;
   "Implement this issue"*) printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff"*) echo '{"role":"r","verdict":"reject","findings":[{"severity":"high","file":"a.ts","line":1,"title":"REAL-FINDING","rationale":"r","suggestion":"s"}]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"reject","reasons":["high finding"]}' ;;
   *) echo '{}' ;;
 esac
@@ -2449,7 +2440,6 @@ case "$last" in
     fi
     printf 'implemented\n' >> ./impl.txt ;;
   "You review a diff"*) echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*) echo '{"decision":"approve","reasons":["ok"]}' ;;
   *) echo '{}' ;;
 esac
@@ -2493,7 +2483,6 @@ case "$last" in
     id="$(printf '%s\n' "$last" | sed -n 's/^Issue:$/x/p' >/dev/null; printf '%s\n' "$last" | awk '/^Issue:$/{getline; print; exit}' | cut -d: -f1)"
     printf 'work for %s\n' "$id" >> "./work-$id.txt" ;;
   "You review a diff"*) echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)
     if printf '%s' "$last" | grep -q '^issue-split: too big'; then
       echo '{"decision":"split","reasons":["two parts"],"issues":[{"title":"first half","text":"do the first half"},{"title":"second half","text":"do the second half"}]}'
@@ -2749,7 +2738,6 @@ case "$last" in
   "Implement this issue"*)
     if printf '%s' "$last" | grep -q '^first:'; then printf 'REJECTED-WORK\n' > ./a.txt; else printf 'second\n' > ./b.txt; fi ;;
   "You review a diff"*) echo '{"role":"r","verdict":"approve","findings":[]}' ;;
-  "Merge these reviewer"*) echo '{}' ;;
   "Decide this attempt"*)
     if printf '%s' "$last" | grep -q '^first:'; then echo '{"decision":"reject","reasons":["wrong"]}'; else echo '{"decision":"approve","reasons":["ok"]}'; fi ;;
   *) echo '{}' ;;

@@ -41,9 +41,9 @@ ticket without a ceiling. This package separates the three concerns:
   A panel below `MIN_REVIEWERS` (default two, maximum three) cannot approve.
 - **Budget** — counters and budget live in `.pipeline/state/<root_id>.json`, never in
   a model context. Attempts are a quality signal per issue; the tree budget is a
-  resource limit that never resets. One attempt is six model invocations
-  (implement, three reviewers, controller, master; research is cached per issue),
-  so 25 ordinary attempts already mean ~150 calls, plus research and reviewer
+  resource limit that never resets. One attempt is five model invocations
+  (implement, three reviewers, master; research is cached per issue),
+  so 25 ordinary attempts already mean ~125 calls, plus research and reviewer
   retries. `max_runs_per_tree` caps implementation attempts, not spending.
   Attempts are reserved before model startup, state writes are atomic, and a
   working-tree lock prevents simultaneous runs from spending the same budget.
@@ -115,7 +115,8 @@ contract before changing setup files, and creates parent directories for an issu
 source such as `backlog/tasks.md`.
 An explicit harness or local-engine change that needs `--force` returns an error
 instead of reporting success with the previous configuration. Issue IDs must be
-unique, including closed entries; completion and split insertion match the full ID.
+unique, including closed entries, ignoring case and trailing dots as Windows and macOS do;
+completion and split insertion match the full ID.
 
 The engine's own commands (`node <package>/bin/pipeline.mjs …`):
 
@@ -172,7 +173,6 @@ models:
   research:          { provider: openai,    model: gpt-5-mini,        thinking: low }
   implement:         { provider: anthropic, model: claude-sonnet-4-5, thinking: high }
   implement_master:  { provider: google,    model: gemini-2.5-pro,    thinking: high }
-  controller:        { provider: openai,    model: gpt-5-nano }
   master_review:     { provider: anthropic, model: claude-opus-4-5,   thinking: high }
   review:
     security:        { provider: google,    model: gemini-2.5-flash,  thinking: medium }

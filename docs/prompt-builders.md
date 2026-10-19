@@ -9,12 +9,11 @@ Maintainer reference; not needed to configure or audit a project. One prompt per
 - [implement and implement_master](#implement-and-implement_master)
 - [reviewers](#reviewers)
 - [Reviewer output schema](#reviewer-output-schema)
-- [controller](#controller)
 - [master review](#master-review)
 
 ## Shared rules
 
-Each prompt receives only its role-specific inputs, listed below, without the previous session's history. Independent reviewers never receive sibling verdicts; the controller and master explicitly receive reviewer outputs. Tool-bearing roles can inspect the repository within their harness's permissions.
+Each prompt receives only its role-specific inputs, listed below, without the previous session's history. Independent reviewers never receive sibling verdicts; the master explicitly receives reviewer outputs. Tool-bearing roles can inspect the repository within their harness's permissions.
 
 Issue text and diff are **untrusted input**. The issue can come from `gh` or Jira, and the diff was written by a model. Both are framed as the thing being judged, never as instructions — a diff that asks the panel for an empty `findings` list would otherwise clear three independent reviewers and a real gate. Framing is a mitigation, not a boundary; see [operations: safety](../skills/governance-pipeline/references/operations.md#safety).
 
@@ -77,16 +76,11 @@ Severity definitions are in the prompt, not in the reviewer's head: **critical**
 
 Parsing is defensive: every fenced block and the raw text are candidates. All candidate findings survive; selecting schema metadata never discards evidence. A malformed candidate makes the response unavailable without erasing valid findings. Deduplication preserves configured blocking membership before severity rank. A schema echo (`approve|reject`) is never a candidate, and prose is never regexed into a verdict.
 
-## controller
-
-Input: the reviewer JSON objects of this attempt, verbatim (capped at `REVIEWERS_MAX_BYTES`).
-Output: one JSON object with the merged finding list and a proposed verdict.
-
-It runs a weak model, so its job is mechanical: deduplicate findings naming the same file and line, apply the severity rule, propose. It is told that it does not decide and that the master sees the originals regardless.
-
 ## master review
 
-Input: issue, diff, the **original** reviewer JSON, the controller's proposal, the deterministic gate JSON, the panel-independence note, and the attempt number.
+Input: issue, diff, the **original** reviewer JSON (capped at `REVIEWERS_MAX_BYTES`), the deterministic gate in compact form — verdict, panel, and every finding by file, line, title, severity and role; blockers first and with their rationale and suggestion clipped to 600 characters, because the capped reviewer block may have cut them; follow-ups without either — under its own `REVIEWERS_MAX_BYTES` cap, the panel-independence note, and the attempt number.
+
+Until 1.2.5 a weak `controller` model merged the reviewer JSON and proposed a verdict in between. The deterministic gate already deduplicates the findings and applies the severity rule, and the master was told to recheck the controller against the originals anyway, so the extra call per attempt added cost and a failure point without adding a decision.
 
 Outcomes: `approve`, `reject` with reasons, `take_over` (the script stashes the rejected tree and a stronger model implements the next attempt fresh from the issue), and — only when the harness allows it, i.e. depth below `max_split_depth` and an issue source that can create children — `split` with two to five sub-issues, each a title and a text.
 

@@ -103,6 +103,22 @@ test("ids that sanitise to the same directory are refused; raw ids are trimmed",
 	await assert.rejects(cmd.list(), (e) => e.code === "SOURCE" && /both become "x-1"/.test(e.message));
 });
 
+test("ids the filesystem folds together, and ids that are no file name, are refused", async () => {
+	const p = join(root, "fs-ids.md");
+	// One work directory and state file on Windows and macOS; refused on every
+	// platform, so a backlog that runs on Linux does not break on the next clone.
+	for (const [a, b] of [["task", "TASK"], ["task", "task."], ["Feat-1", "feat-1.."]]) {
+		writeFileSync(p, `- [ ] ${a}: one\n- [ ] ${b}: two\n`);
+		await assert.rejects(tasksMdSource(p, root).list(), (e) => e.code === "SOURCE" && /share one work directory and state file/.test(e.message), `${a} / ${b}`);
+	}
+	for (const id of [".", "..", "nul", "CON", "com1.txt"]) {
+		writeFileSync(p, `- [ ] ${id}: reserved\n`);
+		await assert.rejects(tasksMdSource(p, root).list(), (e) => e.code === "SOURCE" && /not a usable directory or file name/.test(e.message), id);
+	}
+	writeFileSync(p, "- [ ] .hidden: fine\n- [ ] console: fine\n- [ ] task-1: fine\n");
+	assert.deepEqual((await tasksMdSource(p, root).list()).map((i) => i.raw), [".hidden", "console", "task-1"]);
+});
+
 test("a command source is capped like a gate", async () => {
 	const slow = commandSource("sleep 5; echo x-1: late", { root, env: process.env, timeoutMs: 500 });
 	await assert.rejects(slow.list(), (e) => e.code === "SOURCE" && /timed out after 1s/.test(e.message));

@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { buildControllerPrompt, buildImplementPrompt, buildMasterPrompt, buildResearchPrompt, buildReviewPrompt, template } from "../../lib/prompts/build.mjs";
+import { buildImplementPrompt, buildMasterPrompt, buildResearchPrompt, buildReviewPrompt, template } from "../../lib/prompts/build.mjs";
 
 const dir = mkdtempSync(join(tmpdir(), "prompts-"));
 const soul = join(dir, "SOUL.md");
@@ -46,13 +46,12 @@ test("research prompt carries the blocker history after the stack excerpt", () =
 	assert.match(p, /Never use eval\.\nPrior blockers/);
 });
 
-test("controller and master prompts; split appears only when allowed", () => {
-	const c = buildControllerPrompt({ blocking: "critical,high", reviewersJson: '{"a":1}\n' });
-	assert.ok(c.startsWith("Merge these reviewer JSON objects"));
-	assert.match(c, /blocking: critical,high/);
-	const base = { issueLine: "issue-1: x", diffText: "d\n", reviewersJson: "{}", controllerText: "{}", gateJson: '{"verdict":"clear"}', independenceNote: "Panel independence: every reviewer ran on an explicitly mapped model.", attempt: 2 };
+test("master prompt: reviewer originals next to the gate, no controller; split appears only when allowed", () => {
+	const base = { issueLine: "issue-1: x", diffText: "d\n", reviewersJson: "{}", gateJson: '{"verdict":"clear"}', independenceNote: "Panel independence: every reviewer ran on an explicitly mapped model.", attempt: 2 };
 	const m = buildMasterPrompt({ ...base, splitAllowed: false });
 	assert.ok(m.startsWith("Decide this attempt"));
+	assert.match(m, /Original reviewer output:\n\{\}\n\nDeterministic gate: \{"verdict":"clear"\}/);
+	assert.doesNotMatch(m, /controller/i);
 	assert.match(m, /"decision":"approve\|reject\|take_over"/);
 	assert.doesNotMatch(m, /split/);
 	const s = buildMasterPrompt({ ...base, splitAllowed: true });
@@ -62,6 +61,7 @@ test("controller and master prompts; split appears only when allowed", () => {
 });
 
 test("templates are text files the harness owns", () => {
-	for (const name of ["research", "implement", "review", "controller", "master_review"]) assert.ok(template(name).length > 40, name);
+	for (const name of ["research", "implement", "review", "master_review"]) assert.ok(template(name).length > 40, name);
+	assert.throws(() => template("controller"));
 	assert.match(template("review"), /untrusted input/);
 });

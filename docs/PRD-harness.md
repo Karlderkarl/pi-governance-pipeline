@@ -43,7 +43,7 @@ Issue-/Pipeline-Erstellung
   → Implementierung / TDD
   → Linter + Clean-Code-Gate (deterministisch, kein LLM)
   → 3 parallele Reviews: Security | Quality | Correctness
-  → Controller (schwaches Modell, aggregiert Review-JSON, schlägt vor)
+  → deterministisches Review-Gate (führt die Findings zusammen, Severity-Regel)
   → Master Review (Frontier-Modell, entscheidet — läuft immer)
       ├─ freigegeben  → Governance-Update → nächstes Issue
       ├─ Fix nötig     → zurück zur Implementierung (eigenes Coding-Modell)
@@ -65,7 +65,6 @@ models:
     security:        { provider: Y, model: mid }
     quality:         { provider: Z, model: mid }
     correctness:     { provider: X, model: mid }
-  controller:        { provider: X, model: small }
   master_review:     { provider: Y, model: frontier }
   constraints:
     no_self_review: true
@@ -81,10 +80,10 @@ models:
 **R5** — Jeder Reviewer liefert JSON nach festem Schema: Liste von Findings mit `severity` (critical/high/medium/low), `file`, `line`, `rationale`, plus ein Gesamtvotum.
 **R6** — Freigabekriterium ist **severity-basiert**, nicht prozentual: `critical` und `high` verhindern die Freigabe; `medium` und `low` werden festgehalten und sichtbar gemacht: bei der Freigabe schreibt die Engine sie als `## Follow-ups — <id> (<datum>)` nach MEMORY.md, zusätzlich zum `gate.json` des Versuchs. Die Übernahme ins Backlog erfolgt durch den Menschen; die Pipeline legt keine Tickets an. *(Ersetzt die ursprüngliche 80-%-Regel, die bei drei Reviewern faktisch Einstimmigkeit verlangte.)*
 
-### 4.3 Controller und Master
+### 4.3 Master
 
-**R7** — Der Controller **entscheidet nicht, er schlägt vor.** Sein Output ist ein Vorschlag plus konsolidierte Findings.
-**R8** — Der Master Review läuft über **jeden** Lauf und erteilt die Freigabe. Er sieht die Reviewer-JSONs im Original, nicht nur die Zusammenfassung des Controllers, damit er dessen Aggregationsfehler abfangen kann.
+**R7** — Zwischen Panel und Master steht **kein Modell**. Das deterministische Review-Gate führt die Findings zusammen und wendet die Severity-Regel an. *(Ersetzt den früheren Controller, ein schwaches Modell, das dasselbe vorschlug und vom Master ohnehin gegengeprüft wurde: ein Aufruf pro Versuch ohne eigene Entscheidung.)*
+**R8** — Der Master Review läuft über **jeden** Lauf und erteilt die Freigabe. Er sieht die Reviewer-JSONs im Original neben dem Ergebnis des Gates.
 **R9** — Bei eigenem Fix startet der Master frisch vom Issue und erhält die bisherigen Findings als Ausschlussliste — **nicht** den gescheiterten Diff als Ausgangspunkt. Sonst erbt das neue Modell die gescheiterte Denkrichtung.
 
 ### 4.4 Zähler und Budget
@@ -97,7 +96,7 @@ Zwei getrennte Größen, die nicht vermischt werden dürfen:
 **R10** — Beide Größen leben im Harness (`.pipeline/state/<root_id>.json`), nicht im Modellkontext. Das Modell erfährt höchstens „du hast noch N Versuche".
 **R11** — Parameter mit Defaults: `max_attempts_controller: 3`, `max_attempts_master: 3`, `max_runs_per_tree: 25`, `max_split_depth: 1`.
 
-**Begründung für R11:** Bei Split-Grad 4 und Tiefe 1 ergibt sich `3 + 4 × 6 = 27` Implementierungsläufe, jeder mit rund sechs Modellaufrufen — etwa 160 Aufrufe für ein Ursprungsticket. Bei Tiefe 2 sind es rund 123 Läufe und über 700 Aufrufe. Niemand hat je „mehr als drei Versuche" erlaubt, und trotzdem läuft das System 123-mal. Die Tiefenbegrenzung kappt das exponentielle Wachstum, das Baumbudget deckelt den Rest.
+**Begründung für R11:** Bei Split-Grad 4 und Tiefe 1 ergibt sich `3 + 4 × 6 = 27` Implementierungsläufe, jeder mit rund fünf Modellaufrufen — etwa 135 Aufrufe für ein Ursprungsticket. Bei Tiefe 2 sind es rund 123 Läufe und über 600 Aufrufe. Niemand hat je „mehr als drei Versuche" erlaubt, und trotzdem läuft das System 123-mal. Die Tiefenbegrenzung kappt das exponentielle Wachstum, das Baumbudget deckelt den Rest.
 
 ### 4.5 Sicherheit
 

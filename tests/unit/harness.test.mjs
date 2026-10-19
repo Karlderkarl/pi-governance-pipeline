@@ -18,7 +18,7 @@ test("harness spec: default pi, per-provider overrides, unknown names refuse", (
 });
 
 test("routing: a harness that runs one provider refuses the other providers' roles", () => {
-	const models = { implement: "google/g", controller: "default", "review.correctness": "anthropic/h", "review.quality": "openai/q" };
+	const models = { implement: "google/g", master_review: "default", "review.correctness": "anthropic/h", "review.quality": "openai/q" };
 	const all = routingErrors(models, parseHarnessSpec("claude-code"));
 	assert.equal(all.length, 2);
 	assert.match(all[0], /role implement \(google\/g\) is routed to claude-code/);
@@ -31,11 +31,12 @@ test("routing: a harness that runs one provider refuses the other providers' rol
 
 test("isolation classes per role", () => {
 	assert.equal(isolationOf("review.security"), "reviewer");
-	assert.equal(isolationOf("controller"), "judge");
 	assert.equal(isolationOf("master_review"), "judge");
 	assert.equal(isolationOf("research"), "research");
 	assert.equal(isolationOf("implement"), "implementer");
 	assert.equal(isolationOf("implement_master"), "implementer");
+	// An unknown role is refused, never given the widest class with --approve.
+	for (const role of ["controller", "implment", "", undefined]) assert.throws(() => isolationOf(role), /unknown role/);
 });
 
 test("pi flags: reviewers isolated and never trusted; research read-only and untrusted; judges tool-less", () => {

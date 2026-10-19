@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { initCommand } from "../../lib/cli/init.mjs";
 import { parseRunFlags } from "../../lib/cli/run.mjs";
 import { doctorCommand } from "../../lib/cli/doctor.mjs";
+import { parseWrapper, wrapperText } from "../../lib/cli/wrapper.mjs";
 import { CONTRACT, checkedGit, createProject } from "../fixtures/project.mjs";
 
 test("init creates a nested issue source and forwards harness plus local options", async () => {
@@ -48,7 +49,12 @@ test("an existing wrapper that init would not replace fails before any setup fil
 	const version = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json"), "utf8")).version;
 	const foreign = "#!/usr/bin/env bash\necho legacy > legacy-ran.txt\n";
 	const older = "#!/usr/bin/env bash\nexec npx --yes pi-governance-pipeline@1.0.0 run \"$@\"\n";
-	for (const script of [foreign, older]) {
+	// A version string is a comment away from any script; it proves nothing.
+	const namesTheVersion = `#!/usr/bin/env bash\n# pi-governance-pipeline@${version}\nexit 97\n`;
+	const generated = wrapperText({ version });
+	const appended = `${generated}echo appended > appended-ran.txt\n`;
+	const prepended = generated.replace("exec npx", "echo inserted > inserted-ran.txt\nexec npx");
+	for (const script of [foreign, older, namesTheVersion, appended, prepended]) {
 		const root = createProject();
 		writeFileSync(join(root, "auto-develop.sh"), script);
 		const before = checkedGit(root, ["ls-files", "--stage"]);
@@ -60,4 +66,21 @@ test("an existing wrapper that init would not replace fails before any setup fil
 		assert.match(readFileSync(join(root, "auto-develop.sh"), "utf8"), new RegExp(`pi-governance-pipeline@${version.replace(/\./g, "\.")} run`));
 		assert.equal(await initCommand([], { root }), 0, "a second init on its own wrapper succeeds");
 	}
+});
+
+test("every wrapper init writes is recognised again, CRLF included, and nothing else is", () => {
+	const version = "9.9.9";
+	const configs = [
+		{ version, harness: null, localBin: null },
+		{ version, harness: "anthropic=claude-code", localBin: null },
+		{ version, harness: "odd spec's", localBin: null },
+		{ version, harness: null, localBin: "C:/x/bin/pipeline.mjs" },
+		{ version, harness: "pi", localBin: "/a b/bin/pipeline.mjs" },
+	];
+	for (const config of configs) {
+		assert.deepEqual(parseWrapper(wrapperText(config)), config);
+		assert.deepEqual(parseWrapper(wrapperText(config).replace(/\n/g, "\r\n")), config);
+	}
+	assert.equal(parseWrapper(`#!/usr/bin/env bash\n# pi-governance-pipeline@${version}\nexit 97\n`), null);
+	assert.equal(parseWrapper(wrapperText({ version }).replace(" run ", " run --unattended --yes ")), null);
 });

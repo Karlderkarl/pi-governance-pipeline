@@ -2,10 +2,12 @@
 // governance), INV-05 (gates from the contract), INV-09 (escalation and
 // provider diversity), INV-18 (severity partition), INV-29 (markers refuse).
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	effectiveGates,
 	effectiveIssueSource,
@@ -15,6 +17,7 @@ import {
 	validate,
 } from "../../lib/contract/index.mjs";
 
+const here = dirname(fileURLToPath(import.meta.url));
 const dir = mkdtempSync(join(tmpdir(), "contract-"));
 function agents(body, name = "AGENTS.md") {
 	const p = join(dir, name);
@@ -115,6 +118,22 @@ test("unknown keys warn and never refuse; unparsed intent refuses", () => {
 	const src = readConfig(agents(`${PANEL}\nbudgets:\n  max_atempts_controller: 9`));
 	assert.ok(src.warnings.some((w) => w.includes("max_atempts_controller")));
 	assert.deepEqual(validate(src.config, src).errors, []);
+	// A retired role still parses, names why it is ignored, and routes nothing.
+	const retired = readConfig(agents(PANEL.replace("models:\n", "models:\n  controller: { provider: openai, model: c }\n")));
+	assert.ok(retired.warnings.some((w) => w.includes("`models.controller` is no longer used")), retired.warnings.join("\n"));
+	assert.ok(!retired.warnings.some((w) => w.includes("unknown contract key `models.controller`")));
+	assert.deepEqual(validate(retired.config, retired).errors, []);
+	assert.equal(Object.hasOwn(resolveAllModels(retired.config), "controller"), false);
+	assert.equal(Object.hasOwn(retired.config.models, "controller"), false);
+	// A marker an older /govern left in the retired role is no contract error:
+	// nothing would decide it, and nothing runs it.
+	const marked = readConfig(agents(PANEL.replace("models:\n", 'models:\n  controller: { provider: openai, model: "USER DECISION REQUIRED" }\n')));
+	assert.deepEqual(marked.decisions, []);
+	assert.deepEqual(validate(marked.config, marked).errors, []);
+	const facade = spawnSync(process.execPath, [join(here, "../../lib/governance.mjs"), "model", agents(PANEL), "controller"], { encoding: "utf8" });
+	assert.equal(facade.status, 1, facade.stdout);
+	assert.match(facade.stderr, /role controller is no longer run/);
+	assert.equal(facade.stdout, "");
 	const p = join(dir, "tilde.md");
 	writeFileSync(p, "# A\n~~~yaml pipeline-contract\nmodels:\n  implement: { provider: a, model: m }\n~~~\n");
 	assert.throws(() => readConfig(p), (e) => e.code === "CONTRACT");
