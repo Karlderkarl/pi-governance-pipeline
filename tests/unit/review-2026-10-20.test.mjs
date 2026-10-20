@@ -102,7 +102,7 @@ test("--issue naming a blocked issue exits non-zero without a model call", async
 	const { rc, output } = await run(root);
 	assert.equal(rc, 1, output);
 	assert.match(output, /skip one \(status: blocked\)/);
-	assert.match(output, /state issue \.pipeline one one open/);
+	assert.match(output, /node ".*governance\.mjs" state issue \.pipeline one one open/);
 	assert.equal(calls(root), "");
 });
 
@@ -168,6 +168,14 @@ test("an unmarked example does not stand in for a contract the reader cannot tak
 	// A later fence's opening line does not close it either: the prose in
 	// between is read as contract and refused, never run on defaults.
 	assert.throws(contractOf(`# Governance\n\n\`\`\`yaml pipeline-contract\n${BODY}\nmore prose\n\`\`\`bash\nnpm test\n\`\`\`\n`), /expected `key: value`, got `more prose`/);
+});
+
+// 1.3.1 refused this file, which 1.3.0 read: one key line in sample output is
+// no contract attempt.
+test("a key line in an untagged example next to an unmarked contract warns instead of refusing", () => {
+	const source = contractOf(`# Agents\n\n\`\`\`yaml\n${BODY}\`\`\`\n\nExample output:\n\n\`\`\`\nreview: approve\n\`\`\`\n`)();
+	assert.equal(source.config.contract_version, 2);
+	assert.ok(source.warnings.some((w) => /outside a ```yaml fence with a contract key line/.test(w)), source.warnings.join("\n"));
 });
 
 test("backticks inside a sentence neither open nor close a contract block", () => {

@@ -5,7 +5,9 @@ auto-develop pipeline from that governance: one deliberately chosen model per st
 independent multi-model review, severity-based gating, and a hard run budget.
 The pipeline ships in the package. The skill configures it; nothing is copied.
 
-Version 1.3.1 closes the findings of two independent reviews of 1.3.0. A step
+Version 1.3.2 keeps reading AGENTS.md files that 1.3.0 read: a single contract
+key line in sample output beside a readable contract warns instead of refusing.
+Version 1.3.1 closed the findings of two independent reviews of 1.3.0. A step
 that changes governance and an engine control file in one go no longer leaves
 governance rewritten when the run stops, a refused stash before a `take_over`
 halts instead of escalating on the rejected tree, `--issue` on a blocked issue
@@ -51,18 +53,18 @@ ticket without a ceiling. This package separates the three concerns:
 ## Install
 
 ```bash
-pi install npm:pi-governance-pipeline@1.3.1
+pi install npm:pi-governance-pipeline@1.3.2
 # or, pinned to the git tag
-pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.3.1
+pi install git:github.com/Karlderkarl/pi-governance-pipeline@v1.3.2
 # try it for one run, without installing
-pi -e npm:pi-governance-pipeline@1.3.1
+pi -e npm:pi-governance-pipeline@1.3.2
 ```
 
 Both specs are pinned on purpose. `pi update --extensions` and `pi update --all` do not move a
 pinned version or tag; they only reconcile the checkout to the ref you asked for. Move deliberately:
 
 ```bash
-pi install npm:pi-governance-pipeline@<version>          # e.g. @1.3.1
+pi install npm:pi-governance-pipeline@<version>          # e.g. @1.3.2
 pi install git:github.com/Karlderkarl/pi-governance-pipeline@v<version>
 ```
 
@@ -157,7 +159,7 @@ docs/                         repository only, not packed
   invariants.md                INV-01 … INV-29, each with the test that pins it
 ```
 
-Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.3.1/docs/prompt-builders.md).
+Maintainer reference: [engine prompt design](https://github.com/Karlderkarl/pi-governance-pipeline/blob/v1.3.2/docs/prompt-builders.md).
 This repository-only document is not required to use the installed skill.
 
 ## The contract

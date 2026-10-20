@@ -1,3 +1,17 @@
+# v1.3.2
+
+Corrects one fix of 1.3.1 that refused files 1.3.0 read, found by reviewing the 1.3.1 changes on 2026-10-20.
+
+### Fixed
+
+- **A key line in sample output refused a valid contract.** 1.3.1 made any contract key line in an untagged or `~~~` block a contract error, even beside a readable contract: an `AGENTS.md` with an unmarked ```` ```yaml ```` contract and an example block showing `review: approve` stopped running. Such a block now refuses only when it is clearly a contract attempt — marked `pipeline-contract`, or holding two or more distinct contract keys; a single key line beside a readable contract is a warning that names the block. Without any readable YAML contract, a key line in such a block still refuses, as in 1.3.0.
+- **The marker scan could fold distinct files together on a file system without inode numbers** (FAT, some network shares); it now keys those by their real path.
+- **The hint after `--issue` on a blocked issue names the real path of `governance.mjs`** instead of a package-relative one.
+
+### Documented
+
+- A run halted by a refused stash before a `take_over` does not record the take_over; after the tree is restored, the next run continues on the path the attempt counters show.
+
 # v1.3.1
 
 Closes what two independent reviews of 1.3.0 found on 2026-10-20: a Codex review of the engine and a review of the skill against the code. Every fix has a regression test that fails without it (`tests/unit/review-2026-10-20.test.mjs`).
