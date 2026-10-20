@@ -1,7 +1,7 @@
 // snapshot.test.mjs — INV-20 (governance integrity by snapshot) and INV-14
 // (one governance path list).
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -109,7 +109,8 @@ test("governance paths: one list feeds the diff filter, the pathspecs and the gu
 // A link records its target, not its contents: a role that writes through one
 // changes governance without a byte of the snapshot moving.
 test("a governance link is safe only where its target is itself protected", () => {
-	const root = mkdtempSync(join(tmpdir(), "snap-links-"));
+	// Canonical, as snapshot keys are: a Windows runner's TEMP is an 8.3 short name.
+	const root = realpathSync.native(mkdtempSync(join(tmpdir(), "snap-links-")));
 	const kind = process.platform === "win32" ? "junction" : "dir";
 	writeFileSync(join(root, "AGENTS.md"), "a");
 	// The shared-config case: .pi is a junction to a directory nobody protects.
