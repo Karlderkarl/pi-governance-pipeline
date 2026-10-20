@@ -8,7 +8,7 @@ Structure and update rules for the four files. Generation order matters — each
 - [AGENTS.md](#agentsmd)
 - [SYSTEM.md and harness config](#systemmd-and-harness-config)
 - [MEMORY.md](#memorymd)
-- [Audit mode](#audit-mode)
+- [Drift audit](#drift-audit)
 
 These are structural blueprints, not rigid forms. Drop sections that a small project does not need; do not pad them with placeholders.
 
@@ -24,7 +24,7 @@ Write versions and names as found in the repository, not as stated in the PRD. W
 
 Agent behaviour, and the only file the pipeline reads for configuration. pi loads it natively from the project directory and its ancestors, so it doubles as the standing instruction file.
 
-pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD` — first hit wins, walked from cwd through every ancestor. **`AGENTS.override.md` therefore replaces `AGENTS.md` in every child `pi -p` process.** The pipeline still routes from `AGENTS.md` (or `AGENTS_FILE`) and warns at start when the override exists. Reviewer processes pass `-nc` so they load no context file at all; that is what keeps panel size and the implementer model out of the review prompt.
+pi's candidate list is `AGENTS.override.md`, `AGENTS.md`, `AGENTS.MD`, `CLAUDE.md`, `CLAUDE.MD`. In each directory from cwd up through every ancestor the first hit wins, and one file per directory is loaded. **An `AGENTS.override.md` in the project root therefore replaces that directory's `AGENTS.md` in every child `pi -p` process.** The pipeline still routes from `AGENTS.md` (or `AGENTS_FILE`) and warns at start when the override exists. Reviewer processes pass `-nc` so they load no context file at all; that is what keeps panel size and the implementer model out of the review prompt.
 
 Sections: roles and responsibilities · workflow · review rules · prohibited actions · phase plan · **the machine-readable contract block**.
 
@@ -43,7 +43,7 @@ Keep a short `SYSTEM.md` at the repository root as the human-readable source of 
 - `.pi/SYSTEM.md` (project) or `~/.pi/agent/SYSTEM.md` (global) — **replaces** the default system prompt
 - `.pi/APPEND_SYSTEM.md` or `~/.pi/agent/APPEND_SYSTEM.md` — **appends** without replacing
 
-Replacing the default prompt is a much larger step than appending. Govern writes the root file and copies it byte for byte to `.pi/APPEND_SYSTEM.md` (`cp SYSTEM.md .pi/APPEND_SYSTEM.md`) so it takes effect; a paraphrased copy drifts with the next edit. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. `doctor` warns when the root file exists and the `.pi` copy is missing or differs from it (line endings aside).
+Replacing the default prompt is a much larger step than appending. Govern writes the root file and copies it byte for byte to `.pi/APPEND_SYSTEM.md` (`mkdir -p .pi && cp SYSTEM.md .pi/APPEND_SYSTEM.md`) so it takes effect; a paraphrased copy drifts with the next edit. Do not write `.pi/SYSTEM.md` unless the project genuinely needs to replace pi's prompt. `doctor` warns when the root file exists and the `.pi` copy is missing or differs from it (line endings aside).
 
 When any role runs through Claude Code (`--harness anthropic=claude-code`), render the same facts as `CLAUDE.md`. Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the contract still lives in `AGENTS.md`, which the pipeline reads itself. Reviewers and judges under Claude Code run with `--safe-mode`, which skips `CLAUDE.md`; research retains it.
 
@@ -63,12 +63,12 @@ An approval appends the accepted follow-up findings as `## Follow-ups — <id> (
 
 When history grows unwieldy, archive completed phases to `memory/completed-phases.md` and leave a pointer. Do not let `MEMORY.md` become a changelog — it is a status file, and every line should still be relevant.
 
-## Audit mode
+## Drift audit
 
-Compare governance against both the PRD and the actual repository state, then report drift before changing anything.
+Part of govern mode, not the readiness audit of `/pipeline-audit`. Compare governance against both the PRD and the actual repository state, then report drift before changing anything.
 
-Report in three buckets: PRD says X but governance says Y · governance says X but the repo does Y · governance is silent where it should not be. Run `pipeline doctor` for the mechanical part: contract validity, gates, issue source, wrapper pin, trust state.
+Report in three buckets: PRD says X but governance says Y · governance says X but the repo does Y · governance is silent where it should not be. Run `node <package>/bin/pipeline.mjs doctor` for the mechanical part: contract validity, gates, issue source, wrapper pin, decision markers. It does not establish trust, nor whether the model ids exist.
 
 Ask per file whether to overwrite, merge, or skip. Merging is the usual answer for `MEMORY.md` and rarely right for `SOUL.md`.
 
-Under `pi -p` there is no UI to ask with. Report the drift and state explicitly that nothing was written. An unattended audit that rewrites governance on its own defeats the purpose of having governance.
+Without a human to answer, follow the rule in `SKILL.md`: without `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` write nothing; with it, write only missing files and append to `MEMORY.md`. Report the drift of every other file and state explicitly what was written. An unattended audit that rewrites governance on its own defeats the purpose of having governance.

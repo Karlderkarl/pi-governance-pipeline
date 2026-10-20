@@ -1,3 +1,25 @@
+# v1.3.1
+
+Closes what two independent reviews of 1.3.0 found on 2026-10-20: a Codex review of the engine and a review of the skill against the code. Every fix has a regression test that fails without it (`tests/unit/review-2026-10-20.test.mjs`).
+
+### Fixed
+
+- **A step that changed governance and an engine control file left governance rewritten.** The control guard around every role and gate restored the state file and stopped the run by throwing, so the governance comparison after the step never ran: an implementer or gate that appended to `AGENTS.md` and touched `.pipeline/state` stopped the run with `AGENTS.md` still changed, and the next run read it as governance. Governance is now compared and restored on that path too, for research, both implementers and every gate, and the error names both changes.
+- **A refused stash before a `take_over` escalated anyway.** With `.git/index.lock` held, `implement_master` started on the tree the master had just rejected and the run could approve and commit from it. A refused stash now halts the run with exit 1 before escalation, like a refused stash after a block or before a split.
+- **`--issue` naming a blocked issue exited 0.** It was skipped without a model call and reported as success. It now exits 1 and names the `state issue … open` command; a full run still skips old blocks without failing on them.
+- **`init` kept a CRLF wrapper and reported success.** The wrapper was recognised with line endings ignored and left as it was, so `./auto-develop.sh --dry-run` — the next step of automate — failed on `bash\r`. A recognised wrapper with CRLF is rewritten to LF with its configuration kept.
+- **A `--local` checkout path was a shell expression.** It sat inside `"${PIPELINE_BIN:-…}"`, where a `$` or a backtick in the path expanded. The local wrapper now runs the path as a quoted literal after the `PIPELINE_BIN` override; `init` and `doctor` still recognise a 1.3.0 local wrapper by its pin.
+- **A contract block the reader could not take could be replaced by an example.** Fences were found by a regex over the whole text: an unmarked ```` ```yaml ```` example with a contract key above a `~~~` or untagged contract became the routing in silence, and three backticks inside a sentence could open or close a block. Fences are now read line by line; a `pipeline-contract` mark on a block the reader cannot take, or contract keys in such a block, are contract errors. An empty `contract_version:` is refused instead of read as v1.
+- **The issue-source command saw `PIPELINE_UNATTENDED`.** It ran with the caller's environment, an inherited value included. It now never receives the variable.
+- **Upper-case harness copies escaped the marker scan.** `AGENTS.MD` and `CLAUDE.MD`, which pi loads, are scanned on case-sensitive file systems; a file reached under both spellings is scanned once.
+- **The recovery commands ignored `AGENTS_FILE`.** `governance.mjs state` read only `GOVERNANCE_AGENTS` or `AGENTS.md`; it now falls back to `AGENTS_FILE`, the file the run reads.
+
+### Skill
+
+- **Unattended govern on existing governance had two answers.** `SKILL.md` said write, the governance reference said never write. With `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` govern now writes missing files and appends to `MEMORY.md` only, and reports the drift of every other existing file; `/govern` no longer tells the model to ask when nobody can answer.
+- **The contract skeleton contradicted its own rule.** It is now tagged `yaml pipeline-contract`, and "add nothing else" names what `contract.md` allows (`thinking` on any role, further gates). The skill says that model ids are not checked before the first role call, and the `.pi` copy step creates the directory.
+- **Corrected:** the context-file rule (one file per directory, not one overall), `doctor` checking no trust state, the sizing note's worst case (36: a split may have five sub-issues), the recovery steps' environment (`PIPELINE_ALLOW_DEEP_SPLIT`, `AGENTS_FILE`), the timeout row (a reviewer keeps its partial output), `--yes`, `MIN_REVIEWERS=""`, the `PIPELINE_SHELL` fallback, `PIPELINE_ALLOW_DESTRUCTIVE`, the protected-path and marker lists, the binary entries manifest, the INV-28 summary, quoting a `!command` source, gate-name characters, exit codes, and the missing `version` / `status --json` entries and table-of-contents links.
+
 # v1.3.0
 
 Removes the `controller` role and closes what the independent reviews of that change, of the engine and of the skill found, on 2026-10-19.

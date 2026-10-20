@@ -48,4 +48,4 @@ One line each; the engine's test suite pins them. The full list with reasons and
 | INV-24 | An external issue source is acknowledged at the startup gate before any model sees its text |
 | INV-25 | A real run needs a HEAD commit; an unknown `--issue` is an error |
 | INV-26 | Prompts live under `.pipeline/prompts/`, pruned, and `.pipeline/` must be gitignored |
-| INV-28 | Model roles never write governance; only the engine appends MEMORY.md blocker/pause history; the wrapper carries a version pin and no loop logic; decision markers refuse a real run |
+| INV-28 | Model roles never write governance; only the engine appends MEMORY.md blocker, pause and follow-up history; the wrapper carries a version pin and no loop logic; decision markers refuse a real run |

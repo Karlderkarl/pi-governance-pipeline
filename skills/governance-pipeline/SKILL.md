@@ -15,14 +15,14 @@ Run commands in the project root. `<package>` is the path of this `SKILL.md` wit
 
 Generate governance, or audit it after PRD/repository changes. Read [governance-files.md](references/governance-files.md) and [contract.md](references/contract.md) before writing anything: they define every file and every contract field you may write. Never invent a field or a value format that contract.md does not list.
 
-First decide whether a human can answer: run `echo "${PIPELINE_ALLOW_GOVERNANCE_WRITE:-unset}"`. `1` means the operator authorized unattended generation and nobody will reply — do not ask; write the files, leave a marker for every unresolved decision, and report the markers. Any other value means ask in step 2 and write only after the answers; if you cannot get answers, write nothing and report what is needed.
+First decide whether a human can answer: run `echo "${PIPELINE_ALLOW_GOVERNANCE_WRITE:-unset}"`. `1` means the operator authorized unattended generation and nobody will reply — do not ask; write the files that do not exist yet, leave a marker for every unresolved decision, and report the markers. Existing governance files are not rewritten unattended: append new entries to `MEMORY.md` only, and report the drift of every other existing file instead of overwriting or merging it. Any other value means ask in step 2 and write only after the answers; if you cannot get answers, write nothing and report what is needed.
 
 1. Read the PRD and inspect the actual repository: stack, architecture, security/compliance needs, dependencies and lint/test/type-check commands. Report conflicts rather than choosing silently.
 2. Resolve roles, models, git conventions, budgets, gates and issue source with the human. Present the proposed changes before writing; for existing files, audit first and ask per file: overwrite, merge or skip.
 3. Write the four governance files and harness copies as specified in the references. These are not negotiable, whatever else is dropped:
-   - The contract lives in `AGENTS.md`, in exactly one fence tagged `yaml pipeline-contract`, never in `SOUL.md` or any other file. Its shape is fixed; replace the values, add nothing else (`contract.md` explains every field):
+   - The contract lives in `AGENTS.md`, in exactly one fence tagged `yaml pipeline-contract`, never in `SOUL.md` or any other file. Keep every key and the shape below and replace the values. Add only what `contract.md` lists (`thinking` on any role, further gates); invent nothing else:
 
-     ```yaml
+     ```yaml pipeline-contract
      contract_version: 2
      models:
        research:         { provider: openai,    model: gpt-5-mini }
@@ -34,20 +34,20 @@ First decide whether a human can answer: run `echo "${PIPELINE_ALLOW_GOVERNANCE_
          quality:        { provider: openai,    model: gpt-5 }
          correctness:    { provider: anthropic, model: claude-haiku-4-5 }
        constraints: { no_self_review: true }
-     budgets: { max_attempts_controller: 3, max_attempts_master: 3, max_runs_per_tree: 25, max_split_depth: 1 }
+     budgets: { max_attempts_controller: 3, max_attempts_master: 3, max_runs_per_tree: 25, max_split_depth: 1 }   # max_attempts_controller counts implement attempts (legacy name)
      review: { blocking_severities: [critical, high], followup_severities: [medium, low] }
      issues: { source: tasks.md }                  # a path, or { command: "…", trust: external }
      gates:                                        # the repository's real commands, or gates: []
        - { name: test, run: "npm test" }
      ```
 
-   - `.pi/APPEND_SYSTEM.md` is a byte copy of the root `SYSTEM.md`: write the root file, then `cp SYSTEM.md .pi/APPEND_SYSTEM.md`. Never paraphrase it.
-   - Model ids are ids the configured providers offer (`pi --list-models`), never ones copied from this skeleton or the contract example. With only an OpenRouter key, route explicitly: `{ provider: openrouter, model: <vendor>/<model> }`; reviewers then need two different vendors.
+   - `.pi/APPEND_SYSTEM.md` is a byte copy of the root `SYSTEM.md`: write the root file, then `mkdir -p .pi && cp SYSTEM.md .pi/APPEND_SYSTEM.md`. Never paraphrase it.
+   - Model ids are ids the configured providers offer (`pi --list-models`), never ones copied from this skeleton or the contract example. Nothing checks them before the first role call: the skeleton's ids pass `doctor`. With only an OpenRouter key, route explicitly: `{ provider: openrouter, model: <vendor>/<model> }`; reviewers then need two different vendors.
 
    Mark unresolved decisions with `[USER DECISION REQUIRED]` or `[NEEDS PRD CLARIFICATION]`; the legacy `[NEEDS CLARIFICATION]` also blocks startup. Never invent answers or quote these marker phrases elsewhere in governance, even without brackets. A marker fails `doctor` and refuses a real run; a dry-run only notes prose markers (contract markers still fail validation).
 4. Validate before handing over: run `node <package>/bin/pipeline.mjs doctor` and show its output; never report governance as done without it. Typical pre-automate setup findings are a missing wrapper (WARN), `.pipeline/` not gitignored (FAIL), or a missing file issue source (FAIL); `init` resolves them. A missing HEAD is a separate prerequisite for a real run, not for generating governance or running `init`. Report intentional decision-marker FAILs and these setup prerequisites explicitly; fix other FAILs within the requested scope. Contract errors require correcting the block.
 
-Without `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` an unattended session writes nothing: an existing-governance audit stays read-only. The pipeline-guard extension enforces the same variable for governance writes without a UI. Commit messages of approved work are fixed by the engine (`pipeline: <id>: <title>`); do not promise a commit convention for them in governance. Model roles never write governance; only the engine may append blocker, review-pause and approval follow-up history to `MEMORY.md`.
+Without `PIPELINE_ALLOW_GOVERNANCE_WRITE=1` an unattended session writes nothing: a drift audit of existing governance stays read-only. The pipeline-guard extension enforces the same variable for governance writes without a UI. Commit messages of approved work are fixed by the engine (`pipeline: <id>: <title>`); do not promise a commit convention for them in governance. Model roles never write governance; only the engine may append blocker, review-pause and approval follow-up history to `MEMORY.md`.
 
 ## Mode: automate
 
@@ -68,4 +68,4 @@ Read [audit.md](references/audit.md) before the first command and work through e
 
 - Never let a prompt choose its model; routing comes from `AGENTS.md`.
 - Never bypass the startup gate: `--unattended`, `--auto-merge` and an external issue source are confirmed before the loop or by `--yes`, never mid-run.
-- Never edit `.pipeline/state` by hand. After a tree-budget stop, with no run active (the state commands take the working-tree lock and fail while one is), raise the ceiling with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>` and reopen each blocked issue with `… state issue .pipeline <root_id> <issue_id> open`: a blocked issue is skipped, so the budget alone resumes nothing. [operations.md](references/operations.md) has the details.
+- Never edit `.pipeline/state` by hand. After a tree-budget stop, with no run active (the state commands take the working-tree lock and fail while one is) and with the run's environment (they validate the contract first, so `PIPELINE_ALLOW_DEEP_SPLIT` and `AGENTS_FILE` must match), raise the ceiling with `node <package>/lib/governance.mjs state budget .pipeline <root_id> --set <n>` and reopen each blocked issue with `… state issue .pipeline <root_id> <issue_id> open`: a blocked issue is skipped, so the budget alone resumes nothing. [operations.md](references/operations.md) has the details.

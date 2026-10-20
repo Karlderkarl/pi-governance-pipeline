@@ -243,7 +243,7 @@ budgets:
 MD
 rc=0; node "$LIB/governance.mjs" config "$TMP/tilde-fence.md" >/dev/null 2>"$TMP/tilde.err" || rc=$?
 [[ $rc -eq 2 ]] || fail "~~~ pipeline-contract fence must be a contract error (got $rc)"
-grep -qi "no fenced YAML block parsed" "$TMP/tilde.err" || fail "unparsed contract must name the parse failure"
+grep -qiE "no fenced YAML block parsed|reader cannot take .a ~~~ fence" "$TMP/tilde.err" || fail "unparsed contract must name the parse failure"
 printf '# A\n```yaml\nmodels:\n  implement: { provider: a, model: m }\n' > "$TMP/unclosed.md"
 rc=0; node "$LIB/governance.mjs" config "$TMP/unclosed.md" >/dev/null 2>"$TMP/unclosed.err" || rc=$?
 [[ $rc -eq 2 ]] || fail "unclosed yaml fence with models: must be a contract error (got $rc)"

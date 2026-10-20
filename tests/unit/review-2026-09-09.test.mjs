@@ -137,7 +137,7 @@ test("prose in AGENTS.md is not a failed contract; a fence that did not parse st
 		"# A\n```\nbudgets:\n  max_runs_per_tree: 7\n```\n",
 	]) {
 		writeFileSync(file, broken);
-		assert.throws(() => readConfig(file), /no fenced YAML block parsed/, broken);
+		assert.throws(() => readConfig(file), /not a closed ```yaml fence/, broken);
 	}
 
 	// A shell example that happens to contain a key line is prose, not intent.
